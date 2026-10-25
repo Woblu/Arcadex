@@ -339,6 +339,8 @@ pub fn run() {
             commands::delete_save_state,
             commands::detect_retroarch,
             commands::suggest_emulator_command,
+            commands::detect_emulators,
+            commands::checksum_game,
             commands::test_credentials,
         ])
         .run(tauri::generate_context!())

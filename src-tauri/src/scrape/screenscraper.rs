@@ -171,6 +171,14 @@ pub async fn lookup(client: &reqwest::Client, creds: &Credentials, game: &Game) 
     if game.size > 0 {
         query.push(("romtaille", game.size.to_string()));
     }
+    // A console game too large to have been hashed has its serial instead,
+    // the one identifier it carries that is not a guess. Only sent then: a
+    // checksum is the better key, and where there is one it is used alone.
+    if game.crc32.is_none() {
+        if let Some(serial) = &game.serial {
+            query.push(("serialnum", serial.clone()));
+        }
+    }
 
     let resp = match client.get(BASE).query(&query).send().await {
         Ok(r) => r,

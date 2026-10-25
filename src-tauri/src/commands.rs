@@ -846,6 +846,15 @@ pub fn suggest_emulator_command(exe: String) -> crate::emulators::Suggestion {
     crate::emulators::suggest(&exe)
 }
 
+/// Look for standalone emulators in the places people keep them. Off the main
+/// thread, since it lists a good few folders.
+#[tauri::command]
+pub async fn detect_emulators() -> Result<Vec<crate::emulators::Found>> {
+    tauri::async_runtime::spawn_blocking(crate::emulators::detect)
+        .await
+        .map_err(|e| AppError::Other(format!("emulator search failed: {e}")))
+}
+
 /// Ask both metadata providers whether the stored credentials work.
 #[tauri::command]
 pub async fn test_credentials(app: AppHandle) -> Result<Vec<scrape::ProviderStatus>> {
@@ -1008,6 +1017,56 @@ pub fn dat_status(db: State<Db>) -> Result<DatStatus> {
 pub fn clear_dats(db: State<Db>) -> Result<()> {
     let conn = db.0.lock().unwrap();
     crate::dats::clear(&conn)
+}
+
+/// Work out the checksums of one file a scan skipped as too large, then say
+/// what the catalogue makes of them.
+///
+/// A scan leaves anything past the hashing limit alone, because reading every
+/// disc image in a library would turn a scan into an afternoon. One disc read
+/// once, when asked, is a short wait instead - and gives DAT verification
+/// and ScreenScraper's checksum lookup something to work with.
+#[tauri::command]
+pub async fn checksum_game(app: AppHandle, id: i64) -> Result<crate::dats::Verdict> {
+    let game = {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().unwrap();
+        db::get_game(&conn, id)?.ok_or_else(|| AppError::Other("Game not found".into()))?
+    };
+    let path = std::path::PathBuf::from(&game.path);
+    if crate::consoles::for_boot_file(&path).is_some() {
+        return Err(AppError::Other(
+            "This game is a whole folder rather than one file, so there is no single checksum to take."
+                .into(),
+        ));
+    }
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("m3u")) {
+        return Err(AppError::Other(
+            "This is a set of discs. Each disc is checked on its own.".into(),
+        ));
+    }
+
+    let hashes = tauri::async_runtime::spawn_blocking(move || crate::hashing::hash_rom_whole(&path))
+        .await
+        .map_err(|e| AppError::Other(format!("checksum failed: {e}")))??
+        .ok_or_else(|| AppError::Other("There was nothing in the archive to check.".into()))?;
+
+    let db = app.state::<Db>();
+    let conn = db.0.lock().unwrap();
+    db::set_hashes(
+        &conn,
+        id,
+        &hashes.crc32,
+        &hashes.md5,
+        &hashes.sha1,
+        hashes.inner_name.as_deref(),
+    )?;
+    crate::dats::verify(
+        &conn,
+        Some(&hashes.crc32),
+        Some(&hashes.md5),
+        Some(&hashes.sha1),
+    )
 }
 
 /// What the catalogue says about one game.

@@ -384,6 +384,7 @@ struct ConsoleRecord {
     title: String,
     region: Option<String>,
     size: i64,
+    serial: Option<String>,
 }
 
 fn console_record(game: &ConsoleGame) -> ConsoleRecord {
@@ -393,6 +394,7 @@ fn console_record(game: &ConsoleGame) -> ConsoleRecord {
         title: game.title.clone().unwrap_or_else(|| clean_name(&name)),
         region: guess_region(&name),
         size: consoles::size_on_disk(game) as i64,
+        serial: game.serial.clone(),
         filename: name,
     }
 }
@@ -423,14 +425,15 @@ fn index_console_game(
     if !inserted {
         return Ok(Indexed::AlreadyKnown);
     }
-    Ok(Indexed::Added(
-        conn.query_row(
+    let id: i64 = conn
+        .query_row(
             "SELECT id FROM games WHERE path = ?1",
             rusqlite::params![path_str],
             |r| r.get(0),
         )
-        .unwrap_or(0),
-    ))
+        .unwrap_or(0);
+    db::set_serial(conn, id, r.serial.as_deref())?;
+    Ok(Indexed::Added(id))
 }
 
 /// Library entries that a scan made from inside a console game's folder
@@ -679,14 +682,17 @@ pub fn scan_all(
             // filed as an unidentified .bin called "EBOOT" - and is put right.
             // Once it has been, its name is the folder's, so a system you
             // pick by hand afterwards is not undone by the next scan.
+            let conn = db_handle.lock().unwrap();
             if needs_console_identity(state, game, &filename) {
                 let r = console_record(game);
-                let conn = db_handle.lock().unwrap();
                 db::set_console_identity(&conn, state.id, r.platform, &r.filename, &r.title, r.size)?;
                 tally.reindexed += 1;
             } else {
                 tally.skipped += 1;
             }
+            // A serial is read from the folder every time, so a game listed
+            // before serials were kept picks one up.
+            db::set_serial(&conn, state.id, game.serial.as_deref())?;
         } else if let Some(state) = known.get(&path_str) {
             let ext = path
                 .extension()
@@ -1158,6 +1164,7 @@ mod tests {
         assert_eq!(game.region.as_deref(), Some("USA"));
         assert!(game.size >= 6 * 5000, "the whole folder, not the executable");
         assert!(game.crc32.is_none(), "an executable's checksum matches nothing");
+        assert_eq!(game.serial.as_deref(), Some("BLUS30443"), "the serial is what there is instead");
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&root);

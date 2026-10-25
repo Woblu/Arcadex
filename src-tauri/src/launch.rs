@@ -446,20 +446,9 @@ pub fn build_command(
         return Ok((exe, argv));
     }
 
-    let retroarch = db::get_setting(conn, "retroarch_path")?
-        .map(|p| crate::detect::clean_path(&p))
-        .filter(|p| !p.is_empty())
-        .ok_or_else(|| {
-            AppError::Other("RetroArch path is not set — add it in Settings".into())
-        })?;
-    let ra_path = PathBuf::from(&retroarch);
-    if !ra_path.exists() {
-        return Err(AppError::Other(format!(
-            "RetroArch not found at: {retroarch} — check the path in Settings, \
-             or press Detect RetroArch"
-        )));
-    }
-
+    // Asked before anything about RetroArch: a PlayStation 3 game that says
+    // "RetroArch path is not set" sends you off to fix something that was
+    // never going to run it.
     let core = cfg.core.filter(|c| !c.is_empty()).ok_or_else(|| {
         let name = platforms::display_name(&game.platform);
         // Some systems have no libretro core in existence, so pointing at one
@@ -473,6 +462,20 @@ pub fn build_command(
             AppError::Other(format!("No libretro core set for {name}"))
         }
     })?;
+
+    let retroarch = db::get_setting(conn, "retroarch_path")?
+        .map(|p| crate::detect::clean_path(&p))
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| {
+            AppError::Other("RetroArch path is not set — add it in Settings".into())
+        })?;
+    let ra_path = PathBuf::from(&retroarch);
+    if !ra_path.exists() {
+        return Err(AppError::Other(format!(
+            "RetroArch not found at: {retroarch} — check the path in Settings, \
+             or press Detect RetroArch"
+        )));
+    }
 
     let cores_dir = db::get_setting(conn, "retroarch_cores_dir")?
         .map(|p| crate::detect::clean_path(&p))
@@ -731,6 +734,30 @@ mod tests {
         .unwrap();
         let (_, args) = build_command(&conn, &game, rom).unwrap();
         assert_eq!(args, vec![format!("-dvd_path={rom}")]);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A system no core exists for says so, rather than asking for a
+    /// RetroArch that would not run it anyway.
+    #[test]
+    fn a_system_with_no_core_asks_for_a_standalone_emulator() {
+        let dir = tmp("nocore");
+        let conn = crate::db::open(&dir.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO games (id, path, filename, platform, title, added_at)
+             VALUES (1, 'C:/PS3/Game/PS3_GAME/USRDIR/EBOOT.BIN', 'Game', 'ps3', 'Game', 0)",
+            [],
+        )
+        .unwrap();
+        let game = crate::db::get_game(&conn, 1).unwrap().unwrap();
+
+        // No RetroArch set at all, which is the ordinary case for someone
+        // who only plays newer consoles.
+        let err = build_command(&conn, &game, &game.path).unwrap_err().to_string();
+        assert!(err.contains("standalone emulator"), "{err}");
+        assert!(!err.contains("RetroArch path"), "{err}");
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);

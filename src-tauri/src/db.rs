@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS play_sessions (
 const GAME_COLS: &str = "id, path, filename, platform, size, crc32, md5, sha1, inner_name, \
      title, description, developer, publisher, genre, release_date, players, rating, region, \
      cover_path, screenshot_path, logo_path, scrape_status, scrape_source, favorite, hidden, \
-     play_count, play_seconds, last_played, added_at, base_game_id, patch_path,      cover_custom, title_custom";
+     play_count, play_seconds, last_played, added_at, base_game_id, patch_path, cover_custom, title_custom,      serial";
 
 /// Repoint stored paths after the app data directory has moved.
 ///
@@ -232,6 +232,10 @@ fn migrate(conn: &Connection) -> Result<()> {
         // Set when the title was typed by hand. A provider that later matches
         // the game would otherwise replace a name somebody chose on purpose.
         ("title_custom", "INTEGER NOT NULL DEFAULT 0"),
+        // The disc or catalogue number a console game carries in its own
+        // metadata - BLUS30443, CUSA00003 - for the games too large to have
+        // a checksum to look up.
+        ("serial", "TEXT"),
     ] {
         let mut stmt = conn.prepare("PRAGMA table_info(games)")?;
         let existing: Vec<String> = stmt
@@ -306,6 +310,7 @@ fn row_to_game(row: &Row) -> rusqlite::Result<Game> {
         patch_path: row.get(30)?,
         cover_custom: row.get::<_, i64>(31)? != 0,
         title_custom: row.get::<_, i64>(32)? != 0,
+        serial: row.get(33)?,
     })
 }
 
@@ -739,6 +744,34 @@ pub fn set_console_identity(
             inner_name = NULL
          WHERE id = ?1",
         params![id, platform, filename, title, size],
+    )?;
+    Ok(())
+}
+
+/// Record a console game's serial, once it is known.
+pub fn set_serial(conn: &Connection, id: i64, serial: Option<&str>) -> Result<()> {
+    conn.execute(
+        "UPDATE games SET serial = ?2 WHERE id = ?1 AND serial IS NOT ?2",
+        params![id, serial],
+    )?;
+    Ok(())
+}
+
+/// Store checksums worked out after the fact, for a file a scan skipped as
+/// too large to hash.
+pub fn set_hashes(
+    conn: &Connection,
+    id: i64,
+    crc32: &str,
+    md5: &str,
+    sha1: &str,
+    inner_name: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE games SET crc32 = ?2, md5 = ?3, sha1 = ?4,
+                          inner_name = COALESCE(?5, inner_name)
+         WHERE id = ?1",
+        params![id, crc32, md5, sha1, inner_name],
     )?;
     Ok(())
 }

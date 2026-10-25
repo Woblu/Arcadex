@@ -58,10 +58,21 @@ fn hash_reader<R: Read>(mut r: R) -> Result<Hashes> {
 }
 
 /// Hash a ROM, transparently descending into a zip when there is one clear
-/// ROM inside it.
+/// ROM inside it. Anything past `MAX_HASH_BYTES` is skipped, which is what
+/// keeps a scan of a library full of disc images quick.
 pub fn hash_rom(path: &Path) -> Result<Option<Hashes>> {
+    hash_rom_within(path, MAX_HASH_BYTES)
+}
+
+/// Hash a ROM whatever its size. For checking one disc image when asked to,
+/// where reading every byte is the point rather than a cost to avoid.
+pub fn hash_rom_whole(path: &Path) -> Result<Option<Hashes>> {
+    hash_rom_within(path, u64::MAX)
+}
+
+fn hash_rom_within(path: &Path, limit: u64) -> Result<Option<Hashes>> {
     let meta = std::fs::metadata(path)?;
-    if meta.len() > MAX_HASH_BYTES {
+    if meta.len() > limit {
         return Ok(None);
     }
 
@@ -72,8 +83,8 @@ pub fn hash_rom(path: &Path) -> Result<Option<Hashes>> {
         .to_ascii_lowercase();
 
     match ext.as_str() {
-        "zip" => return hash_zip_entry(path),
-        "7z" => return hash_7z_entry(path),
+        "zip" => return hash_zip_entry(path, limit),
+        "7z" => return hash_7z_entry(path, limit),
         _ => {}
     }
 
@@ -107,7 +118,7 @@ fn pick_entry(entries: impl Iterator<Item = (String, u64)>) -> Option<(String, u
 }
 
 /// Pick the most ROM-looking entry in a zip and hash it.
-fn hash_zip_entry(path: &Path) -> Result<Option<Hashes>> {
+fn hash_zip_entry(path: &Path, limit: u64) -> Result<Option<Hashes>> {
     let f = File::open(path)?;
     let mut archive = zip::ZipArchive::new(BufReader::new(f))?;
 
@@ -116,7 +127,7 @@ fn hash_zip_entry(path: &Path) -> Result<Option<Hashes>> {
     let Some((name, size)) = pick_entry(zip_entries(&mut archive)?.into_iter()) else {
         return Ok(None);
     };
-    if size > MAX_HASH_BYTES {
+    if size > limit {
         return Ok(None);
     }
 
@@ -130,13 +141,13 @@ fn hash_zip_entry(path: &Path) -> Result<Option<Hashes>> {
 ///
 /// The archive header lists every entry with its uncompressed size, so the
 /// choice costs a header read; only the entry we settle on is decompressed.
-fn hash_7z_entry(path: &Path) -> Result<Option<Hashes>> {
+fn hash_7z_entry(path: &Path, limit: u64) -> Result<Option<Hashes>> {
     let archive = sevenz_rust2::Archive::open(path)?;
 
     let Some((name, size)) = pick_entry(sevenz_entries(&archive).into_iter()) else {
         return Ok(None);
     };
-    if size > MAX_HASH_BYTES {
+    if size > limit {
         return Ok(None);
     }
 

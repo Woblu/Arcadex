@@ -42,6 +42,8 @@ pub struct Game {
     pub cover_custom: bool,
     /// True when the title was typed by hand, which protects it from fetches.
     pub title_custom: bool,
+    /// A console game's own disc or catalogue number, `BLUS30443`.
+    pub serial: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

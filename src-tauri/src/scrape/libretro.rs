@@ -174,6 +174,7 @@ mod tests {
             patch_path: None,
             cover_custom: false,
             title_custom: false,
+            serial: None,
         }
     }
 

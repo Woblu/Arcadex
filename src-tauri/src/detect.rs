@@ -323,11 +323,13 @@ mod tests {
     fn builds_platform_candidates() {
         let list = candidates();
         assert!(!list.is_empty());
-        // Every candidate must end in the platform's executable name.
+        // Every candidate must end in the platform's executable name. The
+        // macOS bundle spells it `RetroArch`, and Flatpak exports a launcher
+        // named after the app id rather than the program.
         for (p, _) in &list {
-            assert_eq!(
-                p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                exe_name(),
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            assert!(
+                name.eq_ignore_ascii_case(exe_name()) || name == "org.libretro.RetroArch",
                 "unexpected candidate: {}",
                 p.display()
             );
