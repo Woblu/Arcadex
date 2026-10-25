@@ -1,9 +1,11 @@
 mod cheats;
 mod commands;
+mod consoles;
 mod dats;
 mod db;
 mod discs;
 mod detect;
+mod emulators;
 mod error;
 mod hacks;
 mod hashing;
@@ -300,6 +302,7 @@ pub fn run() {
             commands::back_up_saves,
             commands::delete_save_state,
             commands::detect_retroarch,
+            commands::suggest_emulator_command,
             commands::test_credentials,
         ])
         .run(tauri::generate_context!())

@@ -832,6 +832,14 @@ pub fn detect_retroarch() -> Option<crate::detect::DetectedEmulator> {
     crate::detect::find_retroarch()
 }
 
+/// The command to run games with a standalone emulator, given its
+/// executable. Filled in when one is browsed to, so RPCS3 gets its
+/// `--no-gui` without anyone having to know it wants one.
+#[tauri::command]
+pub fn suggest_emulator_command(exe: String) -> crate::emulators::Suggestion {
+    crate::emulators::suggest(&exe)
+}
+
 /// Ask both metadata providers whether the stored credentials work.
 #[tauri::command]
 pub async fn test_credentials(app: AppHandle) -> Result<Vec<scrape::ProviderStatus>> {

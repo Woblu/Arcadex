@@ -70,6 +70,16 @@ const wii: Glyph = (
   </>
 );
 
+/** The Wii U is its tablet controller, screen in the middle. */
+const wiiu: Glyph = (
+  <>
+    <rect x="1.8" y="6.2" width="20.4" height="11.6" rx="3.2" />
+    <rect x="7.4" y="8.2" width="9.2" height="7.6" rx=".7" />
+    <path d="M3.6 11h2.2M4.7 9.9v2.2" />
+    <circle cx="19.4" cy="11" r=".8" />
+  </>
+);
+
 const nswitch: Glyph = (
   <>
     <rect x="2.4" y="6.4" width="19.2" height="11.2" rx="2.6" />
@@ -215,6 +225,30 @@ const ps2: Glyph = (
   </>
 );
 
+/** The first PlayStation 3: a slab with a rounded crown and a disc slot. */
+const ps3: Glyph = (
+  <>
+    <path d="M2.5 16h19v-2.4c0-2.5-4.3-4.6-9.5-4.6s-9.5 2.1-9.5 4.6Z" />
+    <path d="M7.5 13.2h9" />
+  </>
+);
+
+/** A flat slab whose ends lean, split by a lit seam. */
+const ps4: Glyph = (
+  <>
+    <path d="M5.4 7.5h16.1l-2.9 9H2.5Z" />
+    <path d="M4 12h16" />
+  </>
+);
+
+/** Stood upright: a core between two panels that flare at either end. */
+const ps5: Glyph = (
+  <>
+    <rect x="9.8" y="4" width="4.4" height="16" rx=".8" />
+    <path d="M9.8 4.4 6.2 3c1.6 2.8 2.4 5.8 2.4 9s-.8 6.2-2.4 9l3.6-1.4M14.2 4.4l3.6-1.4c-1.6 2.8-2.4 5.8-2.4 9s.8 6.2 2.4 9l-3.6-1.4" />
+  </>
+);
+
 const psp: Glyph = (
   <>
     <rect x="1.5" y="7" width="21" height="10" rx="3.6" />
@@ -222,6 +256,26 @@ const psp: Glyph = (
     <path d="M4 11h2.2M5.1 9.9v2.2" />
     <circle cx="19" cy="11" r=".8" />
     <circle cx="4.7" cy="14.4" r=".7" />
+  </>
+);
+
+// ------------------------------------------------------------ Microsoft
+
+/** A big box with a round jewel on the lid. */
+const xbox: Glyph = (
+  <>
+    <rect x="2.5" y="7" width="19" height="10" rx="1.6" />
+    <circle cx="12" cy="12" r="2.6" />
+    <circle cx="12" cy="12" r=".7" />
+  </>
+);
+
+/** Waisted at the sides, with the ring of lights by the power button. */
+const xbox360: Glyph = (
+  <>
+    <path d="M3 7.5h18c-.8 1.4-1.2 2.9-1.2 4.5s.4 3.1 1.2 4.5H3c.8-1.4 1.2-2.9 1.2-4.5S3.8 8.9 3 7.5Z" />
+    <circle cx="16.4" cy="12" r="1.5" />
+    <path d="M6.8 10.5v3" />
   </>
 );
 
@@ -446,6 +500,7 @@ const GLYPHS: Record<string, Glyph> = {
   n64,
   gamecube,
   wii,
+  wiiu,
   switch: nswitch,
   gb,
   gbc,
@@ -461,7 +516,12 @@ const GLYPHS: Record<string, Glyph> = {
   dreamcast,
   ps1,
   ps2,
+  ps3,
+  ps4,
+  ps5,
   psp,
+  xbox,
+  xbox360,
   atari2600,
   atari7800,
   lynx,

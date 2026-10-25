@@ -77,6 +77,69 @@ the data track. Where that fails - a PlayStation disc, say - the folder's
 assigned system in **Settings → ROM folders** settles it for everything
 underneath.
 
+### Consoles that install their games
+
+From the PlayStation 3 on, a dump is usually the installed game rather than a
+file: a PlayStation 3 disc copied off is `PS3_GAME/USRDIR/EBOOT.BIN` and a few
+thousand data files, plenty of them called something `.bin`. Walked file by
+file, that was one game called "EBOOT" and hundreds more called whatever the
+data was named.
+
+These folders are now recognised whole, by files the console itself put there,
+and each one is a single game:
+
+| System | Folder | Title from |
+|---|---|---|
+| PlayStation 3 | `PS3_GAME/PARAM.SFO` (a disc), or `PARAM.SFO` and `USRDIR` (installed) | `PARAM.SFO` |
+| PlayStation 4 | `eboot.bin` beside `sce_sys/param.sfo` | `param.sfo` |
+| PlayStation 5 | `eboot.bin` beside `sce_sys/param.json` | `param.json` |
+| Wii U | `code/*.rpx` and `meta/meta.xml` | `meta.xml` |
+| Xbox 360 | `default.xex` at the top | the folder's name |
+
+The entry points at the file the emulator boots, takes its title from the
+console's own metadata and its size from the whole folder, and nothing beneath
+it is walked. A PlayStation 3 update or a PlayStation 4 patch is claimed the
+same way, so its files stay out of the library, but it is not listed, since
+there is nothing to start. A PlayStation Vita dump has the same shape as a
+PlayStation 4 one and is told apart by its `PARAM.SFO`. The structure outranks
+a folder's assigned system: `PS3_GAME` is not a guess.
+
+Nothing in one of these is hashed. The boot file is a few megabytes of
+executable whose checksum matches no catalogue, and the game around it runs to
+tens of gigabytes.
+
+A library scanned before this listed those data files one by one. The next
+scan drops them, says so in its summary, and gives the `EBOOT.BIN` its real
+system and title back. As everywhere else, anything you have played or
+favourited is left alone.
+
+Discs and packages are identified by reading them:
+
+- **PlayStation 3 `.iso`**: `PS3_DISC.SFB` in the ISO 9660 root, which sits
+  in the part of the disc that is never encrypted.
+- **Xbox and Xbox 360 `.iso`**: neither uses ISO 9660 for the game. Both use
+  XDVDFS, whose volume descriptor is 32 sectors into the game partition. A
+  full dump keeps a video partition in front, at an offset that depends on
+  the disc generation, so each known offset is tried. The root then says
+  which console: `default.xbe` boots an Xbox, `default.xex` an Xbox 360.
+- **Xbox 360 Games on Demand and Arcade packages** have no extension at all.
+  They are found by the folder they are filed in (`00007000`, `000D0000`)
+  and read by their header, which carries the dashboard's own title for the
+  game.
+
+Switch dumps (`.nsp`, `.xci`, `.nsz`, `.xcz`) and Wii U single files (`.wua`,
+`.wud`, `.wux`) need none of this, since their extensions are their own.
+
+Multi-disc games on these systems are not folded into an `.m3u`. Their
+emulators do not read one, and Xenia swaps an Xbox 360 game's discs itself.
+
+**Not covered.** No emulator runs Xbox One games, so there is nothing to
+point one at. PlayStation 5 emulation is at an early stage and runs a small
+number of smaller titles, which is why that system is listed: the library can
+hold the games, and launching one runs whatever emulator you set. PlayStation
+Vita games are installed into Vita3K rather than started from a path, and
+`.pkg` files are installers on every PlayStation, so neither is indexed.
+
 ### Telling ROMs from everything else
 
 ROM folders fill up with manuals, box scans, BIOS dumps and installers, and
@@ -569,6 +632,31 @@ Systems with no libretro core in existence, the Switch for one, carry an empty
 core list. Launching one tells you to point it at a standalone emulator instead
 of blaming your RetroArch setup.
 
+**Browse** next to a standalone command recognises the emulator from its
+executable's name and fills in what it needs, which for some of them is more
+than the ROM path:
+
+| Emulator | Command |
+|---|---|
+| RPCS3 | `--no-gui "{rom}"`, or it opens its game list instead |
+| shadPS4 | `-g "{rom}"` (the emulator, not its separate Qt launcher) |
+| Xenia | `"{rom}"` |
+| xemu | `-dvd_path "{rom}"` |
+| Cemu | `-g "{rom}"` |
+| Eden, Citron and the other yuzu descendants | `-g "{rom}"` |
+| Ryujinx | `"{rom}"` |
+| PCSX2, DuckStation | `-batch "{rom}"`, so it exits when the game does and play time stops counting |
+| Dolphin | `-b -e "{rom}"` |
+
+Anything else gets `"emulator" "{rom}"`. Either way the command can be edited
+after. `{rom}` is filled in after the command is split into arguments, so a
+path with spaces is one argument whether or not the template quotes it.
+
+Playdex does not download or link to emulators, firmware or keys. RPCS3 needs
+the PlayStation 3 system software installed, xemu needs files dumped from an
+Xbox, and the Switch emulators need keys and firmware from your own console;
+each emulator's own setup guide covers that.
+
 ## Releasing
 
 Updates are published as GitHub releases and found through the endpoint in
@@ -631,7 +719,11 @@ src-tauri/src/
   platforms.rs    system table: extensions, aliases, preferred cores
   romcheck.rs     telling ROMs from manuals, BIOS dumps and box art
   dats.rs         No-Intro / Redump catalogues and dump verification
-  signature.rs    identifying a system from magic numbers in the header
+  signature.rs    identifying a system from magic numbers in the header,
+                  ISO 9660 and XDVDFS disc filesystems
+  consoles.rs     games that are a folder: PARAM.SFO, param.json, meta.xml,
+                  Xbox 360 packages
+  emulators.rs    standalone emulators and the arguments each one needs
   scrape/
     mod.rs        provider orchestration and fallback
     libretro.rs   artwork, no credentials needed

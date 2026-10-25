@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 use walkdir::WalkDir;
 
+use crate::consoles::{self, ConsoleGame};
 use crate::db;
 use crate::error::Result;
 use crate::hashing;
-use crate::models::ScanProgress;
+use crate::models::{LibraryFolder, ScanProgress};
 use crate::romcheck;
 use crate::signature;
 use crate::platforms;
@@ -20,7 +21,12 @@ pub fn clean_title(filename: &str) -> String {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(filename);
+    clean_name(stem)
+}
 
+/// The same tidying for a name with no extension to strip, such as a folder.
+/// `Vol. 2` is not a file called `Vol` with a `. 2` extension.
+pub fn clean_name(stem: &str) -> String {
     let mut out = String::new();
     let mut depth_paren = 0i32;
     let mut depth_brack = 0i32;
@@ -305,6 +311,12 @@ pub fn index_file(
         .unwrap_or("")
         .to_string();
 
+    // A game that is a folder is described by the folder. `EBOOT.BIN` is not
+    // a title, and the console wrote the real one down.
+    if let Some(game) = consoles::for_boot_file(path) {
+        return index_console_game(conn, &path_str, &game);
+    }
+
     let platform = detect_platform(path, root, override_platform);
 
     // Reject anything that is plainly not a game before spending the time to
@@ -355,6 +367,101 @@ pub fn index_file(
     } else {
         Ok(Indexed::AlreadyKnown)
     }
+}
+
+/// What a console game is recorded as: its folder's name where a file's name
+/// would go, the title the console wrote, and the size of the whole folder.
+///
+/// Nothing is hashed. The file the emulator is handed is a few megabytes of
+/// executable, and a checksum of that matches no catalogue and no scraper;
+/// the game itself runs to tens of gigabytes. A folder's platform is not
+/// open to the folder assignment in Settings either - `PS3_GAME/PARAM.SFO`
+/// is not a guess, and an assignment made for the discs in a folder should
+/// not relabel a game that merely sits there too.
+struct ConsoleRecord {
+    platform: &'static str,
+    filename: String,
+    title: String,
+    region: Option<String>,
+    size: i64,
+}
+
+fn console_record(game: &ConsoleGame) -> ConsoleRecord {
+    let name = game.name();
+    ConsoleRecord {
+        platform: game.platform,
+        title: game.title.clone().unwrap_or_else(|| clean_name(&name)),
+        region: guess_region(&name),
+        size: consoles::size_on_disk(game) as i64,
+        filename: name,
+    }
+}
+
+fn needs_console_identity(state: &db::IndexState, game: &ConsoleGame, boot_name: &str) -> bool {
+    state.platform != game.platform && state.filename == boot_name
+}
+
+fn index_console_game(
+    conn: &rusqlite::Connection,
+    path_str: &str,
+    game: &ConsoleGame,
+) -> Result<Indexed> {
+    let r = console_record(game);
+    let inserted = db::insert_game(
+        conn,
+        path_str,
+        &r.filename,
+        r.platform,
+        &r.title,
+        r.region.as_deref(),
+        r.size,
+        None,
+        None,
+        None,
+        None,
+    )?;
+    if !inserted {
+        return Ok(Indexed::AlreadyKnown);
+    }
+    Ok(Indexed::Added(
+        conn.query_row(
+            "SELECT id FROM games WHERE path = ?1",
+            rusqlite::params![path_str],
+            |r| r.get(0),
+        )
+        .unwrap_or(0),
+    ))
+}
+
+/// Library entries that a scan made from inside a console game's folder
+/// before Playdex knew the folder was one game: its data files, each listed
+/// as a game of its own. The boot file is kept, since that is the game, and
+/// so is anything you have played or favourited, as everywhere else.
+fn stale_console_files(
+    known: &std::collections::HashMap<String, db::IndexState>,
+    games: &[ConsoleGame],
+) -> Vec<(i64, String)> {
+    use std::collections::{HashMap, HashSet};
+
+    let roots: HashMap<&Path, &'static str> =
+        games.iter().map(|g| (g.root.as_path(), g.platform)).collect();
+    let boots: HashSet<&Path> = games.iter().filter_map(|g| g.boot.as_deref()).collect();
+
+    known
+        .iter()
+        .filter(|(_, state)| !state.precious)
+        .filter_map(|(path, state)| {
+            let p = Path::new(path);
+            if boots.contains(p) {
+                return None;
+            }
+            let platform = p.ancestors().skip(1).find_map(|a| roots.get(a))?;
+            Some((
+                state.id,
+                format!("part of a {} game's folder", platforms::display_name(platform)),
+            ))
+        })
+        .collect()
 }
 
 /// Files a disc is actually made of, which a playlist speaks for.
@@ -482,12 +589,19 @@ pub fn add_paths(
 
         // Skipped before inspection so a dropped folder of mixed junk does not
         // report a wall of reasons for files that were never candidates.
+        // Something with no extension is only worth a look if it is an Xbox
+        // 360 package, which is the one kind of game that has none.
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if ext.is_empty() || !platforms::is_indexable_ext(&ext) {
+        let wanted = if ext.is_empty() {
+            consoles::for_boot_file(path).is_some()
+        } else {
+            platforms::is_indexable_ext(&ext)
+        };
+        if !wanted {
             tally.ignored += 1;
             tally.reasons.push(format!("not a ROM format (.{ext})"));
             continue;
@@ -529,59 +643,22 @@ pub fn scan_all(
     emit(app, "discovering", 0, 0, "Looking for ROMs…", &tally, false);
 
     // Pass 1 — discover candidate files.
-    let mut candidates: Vec<(PathBuf, PathBuf, Option<String>)> = Vec::new();
-    for folder in &folders {
-        let root = PathBuf::from(&folder.path);
-        if !root.exists() {
-            continue;
-        }
-        for entry in WalkDir::new(&root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                let hidden = e
-                    .file_name()
-                    .to_str()
-                    .map(|s| s.starts_with('.') || s.eq_ignore_ascii_case("$RECYCLE.BIN"))
-                    .unwrap_or(false);
-                if hidden {
-                    return false;
-                }
-                // An emulator unpacked into the library is not a ROM folder.
-                // Skipping it at its root drops its Sys and data directories
-                // with it, which is where the firmware and fonts that read as
-                // ROMs actually live. Never applied to the library root
-                // itself, which the user chose deliberately.
-                if e.depth() > 0 && e.file_type().is_dir() && romcheck::holds_a_program(e.path()) {
-                    return false;
-                }
-                true
-            })
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if ext.is_empty() || !platforms::is_indexable_ext(&ext) {
-                continue;
-            }
-            candidates.push((
-                path.to_path_buf(),
-                root.clone(),
-                folder.platform_override.clone(),
-            ));
+    let Discovery {
+        candidates,
+        console_games,
+    } = discover(&folders);
+
+    // A scan from before Playdex knew a console's folder layout listed the
+    // folder's data files one by one. They are part of one game, now found.
+    let stale = stale_console_files(&known, &console_games);
+    if !stale.is_empty() {
+        let conn = db_handle.lock().unwrap();
+        for (id, reason) in stale {
+            db::remove_game(&conn, id)?;
+            tally.dropped += 1;
+            tally.reasons.push(reason);
         }
     }
-
-    // A disc kept unzipped is a playlist plus its tracks. Index the playlist,
-    // not the pieces.
-    drop_disc_tracks(&mut candidates);
 
     // Pass 2 — check, hash and record.
     let total = candidates.len();
@@ -594,7 +671,23 @@ pub fn scan_all(
             .unwrap_or("")
             .to_string();
 
-        if let Some(state) = known.get(&path_str) {
+        let console = consoles::for_boot_file(path);
+
+        if let (Some(state), Some(game)) = (known.get(&path_str), &console) {
+            // Already listed. One still recorded under its boot file's own
+            // name was indexed before its folder could be read - an EBOOT.BIN
+            // filed as an unidentified .bin called "EBOOT" - and is put right.
+            // Once it has been, its name is the folder's, so a system you
+            // pick by hand afterwards is not undone by the next scan.
+            if needs_console_identity(state, game, &filename) {
+                let r = console_record(game);
+                let conn = db_handle.lock().unwrap();
+                db::set_console_identity(&conn, state.id, r.platform, &r.filename, &r.title, r.size)?;
+                tally.reindexed += 1;
+            } else {
+                tally.skipped += 1;
+            }
+        } else if let Some(state) = known.get(&path_str) {
             let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -686,6 +779,106 @@ pub fn scan_all(
     emit(app, "done", total, total, &message, &tally, true);
 
     Ok(tally)
+}
+
+/// What walking the library folders turned up.
+struct Discovery {
+    /// Files worth indexing, each with the library folder it was found under
+    /// and that folder's assigned system.
+    candidates: Vec<(PathBuf, PathBuf, Option<String>)>,
+    /// Folders that are one console game each. Their boot files are among
+    /// the candidates; nothing else beneath them is.
+    console_games: Vec<ConsoleGame>,
+}
+
+/// Walk every library folder for things to index.
+fn discover(folders: &[LibraryFolder]) -> Discovery {
+    let mut candidates: Vec<(PathBuf, PathBuf, Option<String>)> = Vec::new();
+    let mut console_games: Vec<ConsoleGame> = Vec::new();
+
+    for folder in folders {
+        let root = PathBuf::from(&folder.path);
+        if !root.exists() {
+            continue;
+        }
+        let mut found: Vec<ConsoleGame> = Vec::new();
+        for entry in WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let hidden = e
+                    .file_name()
+                    .to_str()
+                    .map(|s| s.starts_with('.') || s.eq_ignore_ascii_case("$RECYCLE.BIN"))
+                    .unwrap_or(false);
+                if hidden {
+                    return false;
+                }
+                // A console game's own folder is one game, and nothing under
+                // it is a second: a PlayStation 3 game's USRDIR is thousands
+                // of data files, plenty of them called something.bin. This
+                // applies to the library root too, so adding a single game's
+                // folder works.
+                if e.file_type().is_dir() {
+                    if let Some(game) = consoles::identify_dir(e.path()) {
+                        found.push(game);
+                        return false;
+                    }
+                }
+                // An emulator unpacked into the library is not a ROM folder.
+                // Skipping it at its root drops its Sys and data directories
+                // with it, which is where the firmware and fonts that read as
+                // ROMs actually live. Never applied to the library root
+                // itself, which the user chose deliberately.
+                if e.depth() > 0 && e.file_type().is_dir() && romcheck::holds_a_program(e.path()) {
+                    return false;
+                }
+                true
+            })
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            // An Xbox 360 package has no extension at all, so it is known by
+            // the folder it is filed in and then by its header.
+            let wanted = if ext.is_empty() {
+                consoles::could_be_package(path)
+            } else {
+                platforms::is_indexable_ext(&ext)
+            };
+            if !wanted {
+                continue;
+            }
+            candidates.push((
+                path.to_path_buf(),
+                root.clone(),
+                folder.platform_override.clone(),
+            ));
+        }
+
+        for game in &found {
+            if let Some(boot) = &game.boot {
+                candidates.push((boot.clone(), root.clone(), folder.platform_override.clone()));
+            }
+        }
+        console_games.extend(found);
+    }
+
+    // A disc kept unzipped is a playlist plus its tracks. Index the playlist,
+    // not the pieces.
+    drop_disc_tracks(&mut candidates);
+
+    Discovery {
+        candidates,
+        console_games,
+    }
 }
 
 /// Drop library entries whose file is gone. Does not delete anything on disk.
@@ -907,6 +1100,148 @@ mod tests {
         let bin = root.join("Sonic Riders.bin");
         put(&bin, &raw);
         assert_eq!(detect_platform(&bin, &root, None), "ps2");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn library(root: &Path) -> Vec<LibraryFolder> {
+        vec![LibraryFolder {
+            id: 1,
+            path: root.to_string_lossy().to_string(),
+            platform_override: None,
+            added_at: 0,
+        }]
+    }
+
+    fn ps3_folder(game: &Path, serial: &str) -> PathBuf {
+        put(
+            &game.join("PS3_GAME").join("PARAM.SFO"),
+            &crate::consoles::tests::sfo(&[
+                ("CATEGORY", "DG"),
+                ("TITLE", "Demon's Souls"),
+                ("TITLE_ID", serial),
+            ]),
+        );
+        let usrdir = game.join("PS3_GAME").join("USRDIR");
+        let eboot = usrdir.join("EBOOT.BIN");
+        put(&eboot, &vec![0u8; 5000]);
+        for n in 0..5 {
+            put(&usrdir.join(format!("data{n}.bin")), &vec![1u8; 5000]);
+        }
+        eboot
+    }
+
+    /// A PlayStation 3 game kept as a folder is one game, named the way the
+    /// console names it, and none of its data files are games of their own.
+    #[test]
+    fn a_console_game_folder_is_one_game() {
+        let root = scratch("consolefolder");
+        let eboot = ps3_folder(&root.join("PS3").join("Demon's Souls (USA)"), "BLUS30443");
+        // An ordinary ROM beside it is found as it always was.
+        let rom = root.join("PS3").join("Tetris.gb");
+        put(&rom, &vec![0u8; 5000]);
+
+        let found = discover(&library(&root));
+        let paths: Vec<&PathBuf> = found.candidates.iter().map(|c| &c.0).collect();
+        assert!(paths.contains(&&eboot), "the boot file is the game");
+        assert!(paths.contains(&&rom));
+        assert_eq!(paths.len(), 2, "and nothing in USRDIR is a second game: {paths:?}");
+        assert_eq!(found.console_games.len(), 1);
+
+        let conn = db::open(&root.join("library.db")).unwrap();
+        let Indexed::Added(id) = index_file(&conn, &eboot, &root, None).unwrap() else {
+            panic!("should be added");
+        };
+        let game = db::get_game(&conn, id).unwrap().unwrap();
+        assert_eq!(game.platform, "ps3");
+        assert_eq!(game.title, "Demon's Souls", "named from PARAM.SFO, not EBOOT");
+        assert_eq!(game.filename, "Demon's Souls (USA)");
+        assert_eq!(game.region.as_deref(), Some("USA"));
+        assert!(game.size >= 6 * 5000, "the whole folder, not the executable");
+        assert!(game.crc32.is_none(), "an executable's checksum matches nothing");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What a scan from before Playdex knew the PlayStation 3 left behind:
+    /// the EBOOT as an unidentified game called "EBOOT", and every data file
+    /// beside it as another. The data files go, unless you have played one,
+    /// and the EBOOT is put right.
+    #[test]
+    fn an_older_scans_console_leftovers_are_cleaned_up() {
+        let root = scratch("consolestale");
+        let eboot = ps3_folder(&root.join("BLUS30443"), "BLUS30443");
+        let usrdir = eboot.parent().unwrap();
+
+        let conn = db::open(&root.join("library.db")).unwrap();
+        for (path, seconds) in [
+            (eboot.clone(), 0),
+            (usrdir.join("data0.bin"), 0),
+            (usrdir.join("data1.bin"), 600),
+        ] {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            conn.execute(
+                "INSERT INTO games (path, filename, platform, title, size, play_seconds, added_at)
+                 VALUES (?1, ?2, 'unknown', ?3, 5000, ?4, 0)",
+                rusqlite::params![path.to_string_lossy(), name, clean_title(&name), seconds],
+            )
+            .unwrap();
+        }
+
+        let known = db::index_state(&conn).unwrap();
+        let found = discover(&library(&root));
+        let stale = stale_console_files(&known, &found.console_games);
+        assert_eq!(stale.len(), 1, "one data file; the played one and the EBOOT stay");
+        let data0 = &known[&usrdir.join("data0.bin").to_string_lossy().to_string()];
+        assert_eq!(stale[0].0, data0.id);
+        assert_eq!(stale[0].1, "part of a PlayStation 3 game's folder");
+
+        // The EBOOT is described again from its folder.
+        let state = &known[&eboot.to_string_lossy().to_string()];
+        let game = consoles::for_boot_file(&eboot).unwrap();
+        assert!(needs_console_identity(state, &game, "EBOOT.BIN"));
+        let r = console_record(&game);
+        db::set_console_identity(&conn, state.id, r.platform, &r.filename, &r.title, r.size).unwrap();
+        let after = db::get_game(&conn, state.id).unwrap().unwrap();
+        assert_eq!(after.platform, "ps3");
+        assert_eq!(after.title, "Demon's Souls");
+        // The folder is only the serial, so the title stands in for its name.
+        assert_eq!(after.filename, "Demon's Souls");
+
+        // Moved to another system by hand afterwards, it stays there: the
+        // row no longer looks like something an older scan left behind.
+        db::set_platform(&conn, state.id, "ps4").unwrap();
+        let known = db::index_state(&conn).unwrap();
+        let state = &known[&eboot.to_string_lossy().to_string()];
+        assert!(!needs_console_identity(state, &game, "EBOOT.BIN"));
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An Xbox 360 Games on Demand package has no extension. It is found by
+    /// the folder it is filed in and identified by its header.
+    #[test]
+    fn finds_a_games_on_demand_package() {
+        let root = scratch("godscan");
+        let content = root.join("4D5307E6").join("00007000");
+        let package = content.join("7D0B6B8C2C8A1E3F4B2D");
+        put(&package, &crate::consoles::tests::package(0x7000, "Halo 3"));
+        put(&content.join("7D0B6B8C2C8A1E3F4B2D.data").join("Data0000"), &[0u8; 64]);
+
+        let found = discover(&library(&root));
+        let paths: Vec<&PathBuf> = found.candidates.iter().map(|c| &c.0).collect();
+        assert_eq!(paths, vec![&package]);
+
+        let conn = db::open(&root.join("library.db")).unwrap();
+        let Indexed::Added(id) = index_file(&conn, &package, &root, None).unwrap() else {
+            panic!("should be added");
+        };
+        let game = db::get_game(&conn, id).unwrap().unwrap();
+        assert_eq!(game.platform, "xbox360");
+        assert_eq!(game.title, "Halo 3");
+
+        drop(conn);
         let _ = std::fs::remove_dir_all(&root);
     }
 

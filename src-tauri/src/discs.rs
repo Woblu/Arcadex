@@ -160,6 +160,11 @@ pub fn regroup(conn: &rusqlite::Connection, playlist_root: &Path) -> Result<Grou
 
     let mut sets: BTreeMap<(String, String), Vec<(u32, Game)>> = BTreeMap::new();
     for game in db::disc_candidates(conn)? {
+        // A playlist only helps where the emulator reads one. Xenia does
+        // not, and swaps an Xbox 360 game's discs itself when asked.
+        if crate::platforms::NO_DISC_PLAYLISTS.contains(&game.platform.as_str()) {
+            continue;
+        }
         if let Some((base, n)) = split_disc(&game.filename) {
             if base.is_empty() {
                 continue;
@@ -346,6 +351,24 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(lines[0].ends_with("(Disc 1).cue"), "{}", lines[0]);
         assert!(lines[2].ends_with("(Disc 3).cue"), "{}", lines[2]);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Xenia cannot open an .m3u, so an Xbox 360 game's discs stay as they
+    /// are rather than disappearing into a playlist nothing will start.
+    #[test]
+    fn leaves_discs_alone_where_the_emulator_cannot_read_a_playlist() {
+        let dir = scratch("noplaylist");
+        let conn = db::open(&dir.join("test.db")).unwrap();
+        for n in 1..=2 {
+            add(&conn, &format!("C:/roms/x360/Mass Effect 2 (USA) (Disc {n}).iso"), "xbox360");
+        }
+        let root = dir.join("playlists");
+        assert_eq!(regroup(&conn, &root).unwrap(), Grouped::default());
+        assert_eq!(titles(&conn).len(), 2);
+        assert!(!root.join("xbox360").exists());
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);

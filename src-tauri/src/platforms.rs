@@ -52,9 +52,19 @@ pub const PLATFORMS: &[PlatformDef] = &[
         cores: &["dolphin_libretro"],
     },
     PlatformDef {
+        slug: "wiiu",
+        name: "Nintendo Wii U",
+        // A loose dump is a folder of code, content and meta, which
+        // `consoles` recognises whole; these are the single-file forms.
+        exts: &["wua", "wud", "wux", "rpx"],
+        aliases: &["wii u", "wiiu"],
+        cores: &[],
+    },
+    PlatformDef {
         slug: "switch",
         name: "Nintendo Switch",
-        exts: &["nsp", "xci", "nro"],
+        // nsz and xcz are the compressed forms of nsp and xci.
+        exts: &["nsp", "xci", "nro", "nsz", "xcz"],
         aliases: &["switch", "nintendo switch", "nsw"],
         // No libretro core exists for the Switch. Point this system at a
         // standalone emulator under Settings -> Emulators; an empty core list
@@ -176,6 +186,48 @@ pub const PLATFORMS: &[PlatformDef] = &[
         exts: &[],
         aliases: &["psp", "playstation portable"],
         cores: &["ppsspp_libretro"],
+    },
+    // The three below have no extension of their own. A disc is an `.iso`
+    // told apart by its filesystem, and everything else is a folder that
+    // `consoles` recognises by the files the console itself put there.
+    PlatformDef {
+        slug: "ps3",
+        name: "PlayStation 3",
+        exts: &[],
+        aliases: &["ps3", "playstation 3"],
+        cores: &[],
+    },
+    PlatformDef {
+        slug: "ps4",
+        name: "PlayStation 4",
+        exts: &[],
+        aliases: &["ps4", "playstation 4"],
+        cores: &[],
+    },
+    PlatformDef {
+        slug: "ps5",
+        name: "PlayStation 5",
+        exts: &[],
+        aliases: &["ps5", "playstation 5"],
+        cores: &[],
+    },
+    PlatformDef {
+        slug: "xbox",
+        name: "Xbox",
+        // Discs only: xemu boots an image, not an extracted folder.
+        exts: &[],
+        aliases: &["xbox", "original xbox"],
+        cores: &[],
+    },
+    PlatformDef {
+        slug: "xbox360",
+        name: "Xbox 360",
+        // `default.xex` is what an extracted disc boots from, and Xenia reads
+        // `.zar` archives as well. Discs and Games on Demand packages are
+        // recognised by their contents.
+        exts: &["xex", "zar"],
+        aliases: &["xbox 360", "xbox360", "x360"],
+        cores: &[],
     },
     PlatformDef {
         slug: "atari2600",
@@ -306,6 +358,11 @@ pub const AMBIGUOUS_EXTS: &[&str] = &[
     // Compressed ISO: PSP, PS2, GameCube and Wii all use the name.
     "ciso",
 ];
+
+/// Systems whose emulators cannot take an `.m3u`, so their multi-disc games
+/// stay as separate discs rather than being folded into a playlist that
+/// nothing would open. Xenia swaps discs itself when the game asks.
+pub const NO_DISC_PLAYLISTS: &[&str] = &["ps3", "ps4", "ps5", "xbox", "xbox360", "wiiu", "switch"];
 
 /// Archives we can look inside to find the real ROM.
 pub const ARCHIVE_EXTS: &[&str] = &["zip", "7z"];
@@ -453,6 +510,34 @@ mod tests {
         }
         // wbfs is Wii's alone and should still settle on sight.
         assert!(is_unique_ext("wbfs"));
+    }
+
+    /// The newer consoles share words with the older ones, and the longer
+    /// alias has to win or every Xbox 360 folder files itself as an Xbox.
+    #[test]
+    fn newer_consoles_beat_the_ones_they_share_a_name_with() {
+        assert_eq!(match_alias("Xbox 360").map(|p| p.slug), Some("xbox360"));
+        assert_eq!(match_alias("Xbox360 Games").map(|p| p.slug), Some("xbox360"));
+        assert_eq!(match_alias("Microsoft Xbox").map(|p| p.slug), Some("xbox"));
+        assert_eq!(match_alias("Sony Playstation 3").map(|p| p.slug), Some("ps3"));
+        assert_eq!(match_alias("PS4").map(|p| p.slug), Some("ps4"));
+        assert_eq!(match_alias("Nintendo Wii U").map(|p| p.slug), Some("wiiu"));
+        assert_eq!(match_alias("Nintendo Wii").map(|p| p.slug), Some("wii"));
+        assert_eq!(
+            match_alias_word("Mario Kart 8 (Wii U).wua").map(|p| p.slug),
+            Some("wiiu")
+        );
+        assert_eq!(
+            match_alias_word("Halo 3 (Xbox 360).iso").map(|p| p.slug),
+            Some("xbox360")
+        );
+    }
+
+    #[test]
+    fn compressed_switch_dumps_are_switch_games() {
+        assert_eq!(candidates_for_ext("nsz").first().map(|p| p.slug), Some("switch"));
+        assert_eq!(candidates_for_ext("xcz").first().map(|p| p.slug), Some("switch"));
+        assert!(is_unique_ext("wua"));
     }
 
     #[test]

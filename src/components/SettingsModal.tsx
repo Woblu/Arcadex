@@ -528,11 +528,20 @@ export default function SettingsModal({
                               if (!exe) return;
                               // Build the command instead of making someone
                               // get the quoting and the {rom} placeholder
-                              // right by hand. Whatever else the emulator
+                              // right by hand, along with any arguments the
+                              // emulator is known to need - RPCS3 opens its
+                              // game list without --no-gui. Whatever else it
                               // wants can be typed in after.
+                              const { command, emulator } =
+                                await api.suggestEmulatorCommand(exe);
+                              setMessage(
+                                emulator
+                                  ? `Recognised ${emulator}. Its command is filled in.`
+                                  : null,
+                              );
                               void updateEmulator({
                                 ...cfg,
-                                customCommand: `"${exe}" "{rom}"`,
+                                customCommand: command,
                               });
                             }}
                           >

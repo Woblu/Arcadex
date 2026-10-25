@@ -348,7 +348,7 @@ pub fn cache_usage(cache_root: &Path) -> (u64, usize) {
     (bytes, entries)
 }
 
-fn dir_size(dir: &Path) -> u64 {
+pub(crate) fn dir_size(dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -428,8 +428,13 @@ pub fn build_command(
             .custom_command
             .filter(|c| !c.is_empty())
             .ok_or_else(|| AppError::Other(format!("No emulator set for {}", game.platform)))?;
-        let filled = template.replace("{rom}", rom_path);
-        let mut argv = tokenize(&filled);
+        // Split first, then fill in. Filling first would split a ROM path
+        // with a space in it into two arguments wherever the template left
+        // {rom} unquoted, and a path is one argument however it is spelt.
+        let mut argv: Vec<String> = tokenize(&template)
+            .into_iter()
+            .map(|arg| arg.replace("{rom}", rom_path))
+            .collect();
         if argv.is_empty() {
             return Err(AppError::Other("Emulator command is empty".into()));
         }
@@ -461,7 +466,8 @@ pub fn build_command(
         // is not the fix — a standalone emulator is.
         if platforms::by_slug(&game.platform).map_or(false, |p| p.cores.is_empty()) {
             AppError::Other(format!(
-                "{name} has no libretro core. Point it at a standalone emulator                  in Settings -> Emulators."
+                "{name} has no libretro core. Point it at a standalone emulator \
+                 in Settings -> Emulators."
             ))
         } else {
             AppError::Other(format!("No libretro core set for {name}"))
@@ -673,6 +679,58 @@ mod tests {
         crate::db::set_game_emulator(&conn, 1, None).unwrap();
         assert!(crate::db::game_emulator(&conn, 1).unwrap().is_none());
         assert_eq!(resolve_for_game(&conn, &game).mode, "custom");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A ROM path with spaces in it is one argument, whether or not the
+    /// template remembered to quote {rom}.
+    #[test]
+    fn a_rom_path_with_spaces_is_one_argument() {
+        let dir = tmp("argv");
+        let conn = crate::db::open(&dir.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO games (id, path, filename, platform, title, added_at)
+             VALUES (1, 'C:/PS3/Demon''s Souls (USA)/PS3_GAME/USRDIR/EBOOT.BIN', 'EBOOT.BIN', 'ps3', 'A', 0)",
+            [],
+        )
+        .unwrap();
+        let game = crate::db::get_game(&conn, 1).unwrap().unwrap();
+        let rom = "C:/PS3/Demon's Souls (USA)/PS3_GAME/USRDIR/EBOOT.BIN";
+
+        for template in [
+            r#""C:/Emulators/RPCS3/rpcs3.exe" --no-gui "{rom}""#,
+            r#""C:/Emulators/RPCS3/rpcs3.exe" --no-gui {rom}"#,
+        ] {
+            crate::db::set_emulator(
+                &conn,
+                &EmulatorConfig {
+                    platform: "ps3".into(),
+                    mode: "custom".into(),
+                    core: None,
+                    custom_command: Some(template.into()),
+                },
+            )
+            .unwrap();
+            let (exe, args) = build_command(&conn, &game, rom).unwrap();
+            assert_eq!(exe, "C:/Emulators/RPCS3/rpcs3.exe");
+            assert_eq!(args, vec!["--no-gui".to_string(), rom.to_string()], "{template}");
+        }
+
+        // {rom} inside a longer argument is filled in where it stands.
+        crate::db::set_emulator(
+            &conn,
+            &EmulatorConfig {
+                platform: "ps3".into(),
+                mode: "custom".into(),
+                core: None,
+                custom_command: Some(r#"xemu -dvd_path={rom}"#.into()),
+            },
+        )
+        .unwrap();
+        let (_, args) = build_command(&conn, &game, rom).unwrap();
+        assert_eq!(args, vec![format!("-dvd_path={rom}")]);
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);

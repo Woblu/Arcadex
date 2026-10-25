@@ -197,6 +197,14 @@ export const deleteSaveState = (path: string) =>
 export const detectRetroarch = () =>
   invoke<DetectedEmulator | null>("detect_retroarch");
 
+/** The command to run games with the emulator at `exe`, with whatever
+ *  arguments that emulator is known to need. */
+export const suggestEmulatorCommand = (exe: string) =>
+  invoke<{ command: string; emulator: string | null }>(
+    "suggest_emulator_command",
+    { exe },
+  );
+
 export const testCredentials = () =>
   invoke<ProviderStatus[]>("test_credentials");
 

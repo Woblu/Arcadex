@@ -74,7 +74,7 @@ pub fn identify(path: &Path) -> Option<&'static str> {
     if let Some(found) = identify_bytes(&head) {
         return Some(found);
     }
-    identify_iso9660(path)
+    identify_iso9660(path).or_else(|| identify_xdvdfs(path))
 }
 
 // ------------------------------------------------------------- ISO 9660
@@ -181,6 +181,11 @@ pub fn identify_iso9660(path: &Path) -> Option<&'static str> {
     if named("PSP_GAME") || named("UMD_DATA.BIN") {
         return Some("psp");
     }
+    // The start of a PlayStation 3 disc is never encrypted, and it holds the
+    // filesystem: `PS3_DISC.SFB` and the `PS3_GAME` folder sit in the root.
+    if named("PS3_DISC.SFB") || named("PS3_GAME") {
+        return Some("ps3");
+    }
 
     if let Some((_, lba, len)) = entries.iter().find(|(n, _, _)| n == "SYSTEM.CNF") {
         if let Some(buf) = read_extent(&mut file, layout, *lba, (*len).min(4096)) {
@@ -244,6 +249,107 @@ fn read_directory(dir: &[u8]) -> Vec<(String, u64, usize)> {
             }
         }
         i += len;
+    }
+    out
+}
+
+// --------------------------------------------------------------- XDVDFS
+
+/// The identifier at the start of an Xbox disc's volume descriptor.
+const XDVDFS_MAGIC: &[u8] = b"MICROSOFT*XBOX*MEDIA";
+
+/// Where the game's filesystem starts in an image, and which console a
+/// disc laid out that way belongs to when its root says nothing clearer.
+///
+/// A full dump keeps the disc's video partition in front of the game, at a
+/// size that differs by disc generation. An image cut down to the game
+/// alone (`extract-xiso`, or what most tools write) starts at 0.
+const XDVDFS_PARTITIONS: &[(u64, Option<&str>)] = &[
+    (0, None),
+    // XGD1, the original Xbox.
+    (0x1830_0000, Some("xbox")),
+    // XGD2 and XGD3, the Xbox 360.
+    (0x0FD9_0000, Some("xbox360")),
+    (0x0208_0000, Some("xbox360")),
+];
+
+/// Identify an Xbox or Xbox 360 disc image.
+///
+/// Neither uses ISO 9660 for the game. They share their own filesystem,
+/// XDVDFS, whose volume descriptor sits 32 sectors into the game partition,
+/// and the two consoles are told apart by what the root boots: an original
+/// Xbox runs `default.xbe`, an Xbox 360 `default.xex`.
+pub fn identify_xdvdfs(path: &Path) -> Option<&'static str> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+
+    for (base, generation) in XDVDFS_PARTITIONS {
+        let at = base + 32 * DATA as u64;
+        if at + DATA as u64 > len {
+            continue;
+        }
+        let mut vd = vec![0u8; DATA];
+        if file.seek(SeekFrom::Start(at)).is_err() || file.read_exact(&mut vd).is_err() {
+            continue;
+        }
+        if &vd[..XDVDFS_MAGIC.len()] != XDVDFS_MAGIC {
+            continue;
+        }
+
+        let root_sector = u32::from_le_bytes(vd[0x14..0x18].try_into().ok()?) as u64;
+        let root_len = u32::from_le_bytes(vd[0x18..0x1C].try_into().ok()?) as usize;
+        if root_len > 0 && root_len <= 4 * 1024 * 1024 {
+            let mut dir = vec![0u8; root_len];
+            let start = base + root_sector * DATA as u64;
+            if file.seek(SeekFrom::Start(start)).is_ok() && file.read_exact(&mut dir).is_ok() {
+                let names = xdvdfs_names(&dir);
+                if names.iter().any(|n| n == "default.xex") {
+                    return Some("xbox360");
+                }
+                if names.iter().any(|n| n == "default.xbe") {
+                    return Some("xbox");
+                }
+            }
+        }
+        // The layout alone still says which generation of disc this is.
+        if generation.is_some() {
+            return *generation;
+        }
+    }
+    None
+}
+
+/// The names in one XDVDFS directory, lowercased.
+///
+/// A directory is a binary tree rather than a list: each entry carries the
+/// offsets of its left and right children, in four-byte units, and the
+/// space between entries is padding. Walking the tree reads exactly the
+/// entries there are and never mistakes padding for one.
+fn xdvdfs_names(dir: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![0usize];
+    let mut seen = std::collections::HashSet::new();
+
+    while let Some(at) = stack.pop() {
+        if !seen.insert(at) || at + 14 > dir.len() {
+            continue;
+        }
+        let left = u16::from_le_bytes([dir[at], dir[at + 1]]);
+        let right = u16::from_le_bytes([dir[at + 2], dir[at + 3]]);
+        // An all-ones entry is padding, not a file.
+        if left == 0xFFFF && right == 0xFFFF {
+            continue;
+        }
+        let name_len = dir[at + 13] as usize;
+        if let Some(raw) = dir.get(at + 14..at + 14 + name_len) {
+            out.push(String::from_utf8_lossy(raw).to_ascii_lowercase());
+        }
+        if left != 0 {
+            stack.push(left as usize * 4);
+        }
+        if right != 0 {
+            stack.push(right as usize * 4);
+        }
     }
     out
 }
@@ -446,6 +552,74 @@ mod tests {
         let path = write_temp("Big.bin", &to_raw_track(&iso, 16));
         assert_eq!(identify(&path), Some("ps2"));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A PlayStation 3 disc is known by what sits in its root. Its
+    /// filesystem is in the part of the disc that is never encrypted, so
+    /// this works on a straight dump as well as a decrypted one.
+    #[test]
+    fn reads_a_playstation_3_disc() {
+        let iso = build_iso("PS3_DISC.SFB;1", b".SFB\0\0\0\x01");
+        let path = write_temp("Demon's Souls (USA).iso", &iso);
+        assert_eq!(identify(&path), Some("ps3"));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// One XDVDFS directory entry, padded to four bytes.
+    fn xdvdfs_entry(left: u16, right: u16, name: &str) -> Vec<u8> {
+        let mut e = Vec::new();
+        e.extend_from_slice(&left.to_le_bytes());
+        e.extend_from_slice(&right.to_le_bytes());
+        e.extend_from_slice(&40u32.to_le_bytes());
+        e.extend_from_slice(&1024u32.to_le_bytes());
+        e.push(0x20);
+        e.push(name.len() as u8);
+        e.extend_from_slice(name.as_bytes());
+        while e.len() % 4 != 0 {
+            e.push(0xFF);
+        }
+        e
+    }
+
+    /// An Xbox disc image with its game partition at `base`, holding a root
+    /// directory of two files.
+    fn build_xdvdfs(base: usize, boot: &str) -> Vec<u8> {
+        const SEC: usize = 2048;
+        let root_sector = 34usize;
+        let mut img = vec![0u8; base + SEC * 40];
+
+        // `media` at the top of the tree and the boot file as its right
+        // child, so finding it means following the tree rather than reading
+        // the first entry.
+        let right_at = xdvdfs_entry(0, 0, "media").len();
+        let mut dir = xdvdfs_entry(0, (right_at / 4) as u16, "media");
+        dir.extend_from_slice(&xdvdfs_entry(0, 0, boot));
+        dir.resize(SEC, 0xFF);
+
+        let vd = base + 32 * SEC;
+        img[vd..vd + 20].copy_from_slice(b"MICROSOFT*XBOX*MEDIA");
+        img[vd + 0x14..vd + 0x18].copy_from_slice(&(root_sector as u32).to_le_bytes());
+        img[vd + 0x18..vd + 0x1C].copy_from_slice(&(SEC as u32).to_le_bytes());
+        let r = base + root_sector * SEC;
+        img[r..r + SEC].copy_from_slice(&dir);
+        img
+    }
+
+    #[test]
+    fn tells_an_xbox_disc_from_an_xbox_360_one() {
+        let x360 = write_temp("Halo 3.iso", &build_xdvdfs(0, "default.xex"));
+        assert_eq!(identify(&x360), Some("xbox360"));
+
+        let xbox = write_temp("Halo.iso", &build_xdvdfs(0, "default.xbe"));
+        assert_eq!(identify(&xbox), Some("xbox"));
+
+        // A full XGD3 dump keeps the game partition further in.
+        let full = write_temp("Forza.iso", &build_xdvdfs(0x0208_0000, "default.xex"));
+        assert_eq!(identify(&full), Some("xbox360"));
+
+        for p in [x360, xbox, full] {
+            let _ = std::fs::remove_dir_all(p.parent().unwrap());
+        }
     }
 
     /// A raw track full of nothing is still not a disc.

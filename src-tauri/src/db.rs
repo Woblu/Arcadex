@@ -653,6 +653,7 @@ pub struct IndexState {
     pub id: i64,
     pub platform: String,
     pub inner_name: Option<String>,
+    pub filename: String,
     /// True when the entry carries something a scan must never throw away on
     /// a heuristic: time played, a favourite mark, or a tie to a ROM hack.
     pub precious: bool,
@@ -663,7 +664,8 @@ pub fn index_state(conn: &Connection) -> Result<std::collections::HashMap<String
         "SELECT g.id, g.path, g.platform, g.inner_name,
                 (g.play_seconds > 0 OR g.play_count > 0 OR g.favorite <> 0
                  OR g.base_game_id IS NOT NULL OR g.patch_path IS NOT NULL
-                 OR EXISTS (SELECT 1 FROM games h WHERE h.base_game_id = g.id))
+                 OR EXISTS (SELECT 1 FROM games h WHERE h.base_game_id = g.id)),
+                g.filename
          FROM games g",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -674,6 +676,7 @@ pub fn index_state(conn: &Connection) -> Result<std::collections::HashMap<String
                 platform: r.get(2)?,
                 inner_name: r.get(3)?,
                 precious: r.get(4)?,
+                filename: r.get(5)?,
             },
         ))
     })?;
@@ -705,6 +708,37 @@ pub fn reindex_game(
             inner_name = ?7
          WHERE id = ?1",
         params![id, platform, size, crc32, md5, sha1, inner_name],
+    )?;
+    Ok(())
+}
+
+/// Describe an existing row as the console game it turns out to be.
+///
+/// A PlayStation 3 `EBOOT.BIN` indexed before Playdex knew the system was
+/// filed as an unidentified `.bin` called "EBOOT". The folder around it says
+/// what it really is, and that outranks what the row was guessed to be - a
+/// platform picked by hand for a file called EBOOT was picked for want of a
+/// better answer. A title typed by hand is still kept.
+pub fn set_console_identity(
+    conn: &Connection,
+    id: i64,
+    platform: &str,
+    filename: &str,
+    title: &str,
+    size: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE games SET
+            platform   = ?2,
+            filename   = ?3,
+            title      = CASE WHEN title_custom <> 0 THEN title ELSE ?4 END,
+            size       = ?5,
+            crc32      = NULL,
+            md5        = NULL,
+            sha1       = NULL,
+            inner_name = NULL
+         WHERE id = ?1",
+        params![id, platform, filename, title, size],
     )?;
     Ok(())
 }
