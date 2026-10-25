@@ -15,6 +15,7 @@ import type {
   DropTally,
   ScanProgress,
   DetectedEmulator,
+  FoundEmulator,
   HackBundle,
   PatchEntry,
   PlatformInfo,
@@ -197,6 +198,10 @@ export const deleteSaveState = (path: string) =>
 export const detectRetroarch = () =>
   invoke<DetectedEmulator | null>("detect_retroarch");
 
+/** Standalone emulators installed in the places people keep them. */
+export const detectEmulators = () =>
+  invoke<FoundEmulator[]>("detect_emulators");
+
 /** The command to run games with the emulator at `exe`, with whatever
  *  arguments that emulator is known to need. */
 export const suggestEmulatorCommand = (exe: string) =>
@@ -305,3 +310,8 @@ export const datStatus = () => invoke<DatStatus>("dat_status");
 export const clearDats = () => invoke<void>("clear_dats");
 export const verifyGame = (id: number) =>
   invoke<DatVerdict>("verify_game", { id });
+
+/** Checksum a file a scan skipped as too large, and verify it. Reads the
+ *  whole file, so it takes a while on a disc image. */
+export const checksumGame = (id: number) =>
+  invoke<DatVerdict>("checksum_game", { id });

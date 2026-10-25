@@ -35,6 +35,8 @@ export interface Game {
   coverCustom: boolean;
   /** True when the title was typed by hand; metadata fetches leave it alone. */
   titleCustom: boolean;
+  /** A console game's own disc or catalogue number, `BLUS30443`. */
+  serial: string | null;
 }
 
 export interface HackPreview {
@@ -142,6 +144,16 @@ export interface DetectedEmulator {
   coresDir: string | null;
   source: string;
   coreCount: number;
+}
+
+/** A standalone emulator found installed. */
+export interface FoundEmulator {
+  emulator: string;
+  path: string;
+  /** Ready to save as a system's command. */
+  command: string;
+  /** The systems it runs. */
+  platforms: string[];
 }
 
 export interface ProviderStatus {
