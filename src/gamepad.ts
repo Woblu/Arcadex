@@ -117,20 +117,178 @@ export function resolveBindings(
 
 /**
  * On an unrecognised pad the D-pad is usually a hat switch on an axis rather
- * than four buttons. It reports eight directions as fractions of a turn, so
- * the angle gets decoded instead of matching a magic list of values.
+ * than four buttons. The switch has eight positions, clockwise from up, and
+ * the browser spreads them evenly from -1 to 1 - a seventh of the range
+ * apart, so up is -1, right is -3/7 and up-left is 1. Resting is reported
+ * outside the range, commonly 1.28.
+ *
+ * This used to read the value as a fraction of a full turn and then test
+ * which way it pointed with the comparison the wrong way round, so on these
+ * pads every direction came out reversed.
  */
-function hatDirections(value: number): Record<NavDirection, boolean> {
+export function hatDirections(value: number): Record<NavDirection, boolean> {
   const none = { up: false, down: false, left: false, right: false };
-  // Resting is reported outside the range, commonly 1.28 or -1.
   if (value < -1.05 || value > 1.05) return none;
 
-  const turn = ((value + 1) / 2) * 360; // 0 = up, going clockwise
-  const near = (deg: number) => {
-    const away = Math.abs(((turn - deg + 540) % 360) - 180);
-    return 180 - away <= 67;
+  // 0 up, 1 up-right, 2 right, 3 down-right, 4 down, 5 down-left, 6 left,
+  // 7 up-left. A diagonal counts as both of its neighbours.
+  const k = Math.round(((value + 1) * 7) / 2);
+  return {
+    up: k === 7 || k <= 1,
+    right: k >= 1 && k <= 3,
+    down: k >= 3 && k <= 5,
+    left: k >= 5 && k <= 7,
   };
-  return { up: near(0), right: near(90), down: near(180), left: near(270) };
+}
+
+/** Something that happened on the pad this frame. */
+export type PadEvent =
+  | { kind: "direction"; dir: NavDirection }
+  | { kind: "confirm" | "back" | "alt" | "aux" | "start" | "select" }
+  | { kind: "shoulder"; side: "left" | "right" }
+  | { kind: "raw"; index: number };
+
+/** The part of a `Gamepad` that is read. */
+export interface PadSnapshot {
+  buttons: ReadonlyArray<{ pressed: boolean }>;
+  axes: ReadonlyArray<number>;
+}
+
+/**
+ * Turns one frame of pad state after another into presses.
+ *
+ * Kept apart from the hook, which owns the browser's side of things - the
+ * animation frame, focus, pads coming and going - so this half can be fed
+ * frames directly and checked.
+ */
+export class PadReader {
+  /**
+   * False until a frame has been spent recording what is already held down.
+   *
+   * Without this, coming back from an emulator while still holding a button
+   * reads as a fresh press: the map of held buttons is empty, so the button
+   * looks like it went from up to down and the game relaunches the moment
+   * you quit it.
+   */
+  private primed = false;
+  /** Last frame's state, keyed by button index. */
+  private held = new Map<number, boolean>();
+  /** Separate keys for raw reporting, so both can fire in one frame. */
+  private heldRaw = new Map<number, boolean>();
+  private nextRepeat = new Map<NavDirection, number>();
+
+  /** Forget everything, so the next frame primes afresh. */
+  reset() {
+    this.primed = false;
+    this.held.clear();
+    this.heldRaw.clear();
+    this.nextRepeat.clear();
+  }
+
+  get isPrimed() {
+    return this.primed;
+  }
+
+  /** The presses in this frame, in the order they should be handled. */
+  frame(pad: PadSnapshot, now: number, b: PadBindings, wantRaw = false): PadEvent[] {
+    const out: PadEvent[] = [];
+
+    // Spend one frame learning what is already held before anything counts
+    // as a press. See `primed`.
+    if (!this.primed) {
+      this.primed = true;
+      for (let i = 0; i < pad.buttons.length; i++) {
+        this.held.set(i, pad.buttons[i].pressed);
+        this.heldRaw.set(i, pad.buttons[i].pressed);
+      }
+      return out;
+    }
+
+    // Report presses by raw index, so the setup screen can show what the pad
+    // actually sends rather than leaving someone to guess.
+    if (wantRaw) {
+      for (let i = 0; i < pad.buttons.length; i++) {
+        const down = pad.buttons[i].pressed;
+        if (down && !(this.heldRaw.get(i) ?? false)) out.push({ kind: "raw", index: i });
+        this.heldRaw.set(i, down);
+      }
+    }
+
+    const pressed = (index: number) =>
+      index >= 0 && pad.buttons.length > index && pad.buttons[index].pressed;
+
+    const edge = (index: number): boolean => {
+      const down = pressed(index);
+      const before = this.held.get(index) ?? false;
+      this.held.set(index, down);
+      return down && !before;
+    };
+
+    const direction = (dir: NavDirection, active: boolean) => {
+      if (!active) {
+        this.nextRepeat.delete(dir);
+        return;
+      }
+      const due = this.nextRepeat.get(dir);
+      if (due === undefined) {
+        this.nextRepeat.set(dir, now + REPEAT_DELAY);
+        out.push({ kind: "direction", dir });
+      } else if (now >= due) {
+        this.nextRepeat.set(dir, now + REPEAT_RATE);
+        out.push({ kind: "direction", dir });
+      }
+    };
+
+    const x = pad.axes[0] ?? 0;
+    const y = pad.axes[1] ?? 0;
+
+    // A recognised pad puts the D-pad on buttons; an unrecognised one
+    // usually puts it on a hat axis instead.
+    const hasDpadButtons = pad.buttons.length > BTN.right;
+    const hat =
+      !hasDpadButtons && pad.axes.length > 9
+        ? hatDirections(pad.axes[9])
+        : { up: false, down: false, left: false, right: false };
+
+    direction("left", pressed(BTN.left) || hat.left || x < -STICK);
+    direction("right", pressed(BTN.right) || hat.right || x > STICK);
+    direction("up", pressed(BTN.up) || hat.up || y < -STICK);
+    direction("down", pressed(BTN.down) || hat.down || y > STICK);
+
+    if (edge(b.confirm)) out.push({ kind: "confirm" });
+    if (edge(b.back)) out.push({ kind: "back" });
+    if (edge(b.alt)) out.push({ kind: "alt" });
+    if (edge(b.aux)) out.push({ kind: "aux" });
+    if (edge(BTN.start)) out.push({ kind: "start" });
+    if (edge(BTN.select)) out.push({ kind: "select" });
+    if (edge(BTN.lb)) out.push({ kind: "shoulder", side: "left" });
+    if (edge(BTN.rb)) out.push({ kind: "shoulder", side: "right" });
+    return out;
+  }
+}
+
+/** Hand one event to whichever handler wants it. */
+function dispatch(h: GamepadHandlers, e: PadEvent) {
+  switch (e.kind) {
+    case "direction":
+      return h.onDirection?.(e.dir);
+    case "confirm":
+      return h.onConfirm?.();
+    case "back":
+      return h.onBack?.();
+    case "alt":
+      return h.onAlt?.();
+    case "aux":
+      return h.onAux?.();
+    case "start":
+      return h.onStart?.();
+    case "select":
+      return h.onSelect?.();
+    case "shoulder":
+      return h.onShoulder?.(e.side);
+    case "raw":
+      return h.onRawButton?.(e.index);
+  }
 }
 
 export function useGamepad(
@@ -151,57 +309,12 @@ export function useGamepad(
 
     let raf = 0;
     let sawPad = false;
-    /**
-     * False until a frame has been spent recording what is already held down.
-     *
-     * Without this, coming back from an emulator while still holding a button
-     * reads as a fresh press: the map of held buttons is empty, so the button
-     * looks like it went from up to down and the game relaunches the moment
-     * you quit it.
-     */
-    let primed = false;
-    /** Last frame's state, keyed by button index. */
-    const held = new Map<number, boolean>();
-    /** Separate keys for the raw listener, so both can fire in one frame. */
-    const heldRaw = new Map<number, boolean>();
-    const nextRepeat = new Map<NavDirection, number>();
-
-    const pressed = (pad: Gamepad, index: number) =>
-      index >= 0 && pad.buttons.length > index && pad.buttons[index].pressed;
-
-    const edge = (pad: Gamepad, index: number): boolean => {
-      const now = pressed(pad, index);
-      const before = held.get(index) ?? false;
-      held.set(index, now);
-      return now && !before;
-    };
-
-    const direction = (dir: NavDirection, active: boolean, now: number) => {
-      if (!active) {
-        nextRepeat.delete(dir);
-        return;
-      }
-      const due = nextRepeat.get(dir);
-      if (due === undefined) {
-        nextRepeat.set(dir, now + REPEAT_DELAY);
-        ref.current.onDirection?.(dir);
-      } else if (now >= due) {
-        nextRepeat.set(dir, now + REPEAT_RATE);
-        ref.current.onDirection?.(dir);
-      }
-    };
-
-    const forget = () => {
-      primed = false;
-      held.clear();
-      heldRaw.clear();
-      nextRepeat.clear();
-    };
+    const reader = new PadReader();
 
     let focused = true;
     const onBlur = () => {
       focused = false;
-      forget();
+      reader.reset();
     };
     const onFocus = () => {
       focused = true;
@@ -221,7 +334,7 @@ export function useGamepad(
       // so that a webview which reports focus oddly leaves the pad working
       // rather than silently dead.
       if (!focused) {
-        if (primed) forget();
+        if (reader.isPrimed) reader.reset();
         return;
       }
 
@@ -231,7 +344,7 @@ export function useGamepad(
       if (!pad) {
         if (sawPad) {
           sawPad = false;
-          forget();
+          reader.reset();
           ref.current.onConnected?.(false, null);
         }
         return;
@@ -247,53 +360,13 @@ export function useGamepad(
         });
       }
 
-      // Spend one frame learning what is already held before anything counts
-      // as a press. See `primed`.
-      if (!primed) {
-        primed = true;
-        for (let i = 0; i < pad.buttons.length; i++) {
-          held.set(i, pad.buttons[i].pressed);
-          heldRaw.set(i, pad.buttons[i].pressed);
-        }
-        return;
-      }
-
-      // Report presses by raw index, so the setup screen can show what the pad
-      // actually sends rather than leaving someone to guess.
-      if (ref.current.onRawButton) {
-        for (let i = 0; i < pad.buttons.length; i++) {
-          const down = pad.buttons[i].pressed;
-          if (down && !(heldRaw.get(i) ?? false)) ref.current.onRawButton(i);
-          heldRaw.set(i, down);
-        }
-      }
-
-      const now = performance.now();
-      const b = bindingsRef.current;
-      const x = pad.axes[0] ?? 0;
-      const y = pad.axes[1] ?? 0;
-
-      // A recognised pad puts the D-pad on buttons; an unrecognised one
-      // usually puts it on a hat axis instead.
-      const hasDpadButtons = pad.buttons.length > BTN.right;
-      const hat =
-        !hasDpadButtons && pad.axes.length > 9
-          ? hatDirections(pad.axes[9])
-          : { up: false, down: false, left: false, right: false };
-
-      direction("left", pressed(pad, BTN.left) || hat.left || x < -STICK, now);
-      direction("right", pressed(pad, BTN.right) || hat.right || x > STICK, now);
-      direction("up", pressed(pad, BTN.up) || hat.up || y < -STICK, now);
-      direction("down", pressed(pad, BTN.down) || hat.down || y > STICK, now);
-
-      if (edge(pad, b.confirm)) ref.current.onConfirm?.();
-      if (edge(pad, b.back)) ref.current.onBack?.();
-      if (edge(pad, b.alt)) ref.current.onAlt?.();
-      if (edge(pad, b.aux)) ref.current.onAux?.();
-      if (edge(pad, BTN.start)) ref.current.onStart?.();
-      if (edge(pad, BTN.select)) ref.current.onSelect?.();
-      if (edge(pad, BTN.lb)) ref.current.onShoulder?.("left");
-      if (edge(pad, BTN.rb)) ref.current.onShoulder?.("right");
+      const events = reader.frame(
+        pad,
+        performance.now(),
+        bindingsRef.current,
+        !!ref.current.onRawButton,
+      );
+      for (const e of events) dispatch(ref.current, e);
     };
 
     raf = requestAnimationFrame(poll);
@@ -352,14 +425,7 @@ function centre(el: Element) {
   return { x: r.left + r.width / 2, y: r.top + r.height / 2, r };
 }
 
-/**
- * Move focus one step in `dir`.
- *
- * Candidates are scored by distance, with movement along the axis of travel
- * weighted far more heavily than drift across it, so "down" from a grid cell
- * prefers the cell directly below over a nearer one two columns away. That is
- * the behaviour that makes a grid feel like a grid.
- */
+/** Move focus one step in `dir`, to the nearest thing that way. */
 export function focusInDirection(dir: NavDirection): boolean {
   const items = candidates();
   if (items.length === 0) return false;
@@ -370,34 +436,48 @@ export function focusInDirection(dir: NavDirection): boolean {
     return true;
   }
 
-  const from = centre(active);
+  const others = items.filter((el) => el !== active);
+  const best = nearestInDirection(centre(active), others.map(centre), dir);
+  if (best === null) return false;
+  focusQuietly(others[best]);
+  return true;
+}
+
+/**
+ * Which of `points` is the next one along from `from` in `dir`, by index, or
+ * null when nothing lies that way.
+ *
+ * Distance along the axis of travel counts once and drift across it three
+ * times, so "down" from a grid cell prefers the cell directly below over a
+ * nearer one two columns away. That is the behaviour that makes a grid feel
+ * like a grid.
+ */
+export function nearestInDirection(
+  from: { x: number; y: number },
+  points: ReadonlyArray<{ x: number; y: number }>,
+  dir: NavDirection,
+): number | null {
   const horizontal = dir === "left" || dir === "right";
   const sign = dir === "right" || dir === "down" ? 1 : -1;
 
-  let best: HTMLElement | null = null;
+  let best: number | null = null;
   let bestScore = Infinity;
 
-  for (const el of items) {
-    if (el === active) continue;
-    const to = centre(el);
-
+  points.forEach((to, i) => {
     const along = horizontal ? (to.x - from.x) * sign : (to.y - from.y) * sign;
     const across = horizontal ? to.y - from.y : to.x - from.x;
 
     // Must actually lie in the direction asked for. The tolerance forgives
     // rows whose items are not pixel-aligned.
-    if (along < 6) continue;
+    if (along < 6) return;
 
     const score = along + Math.abs(across) * 3;
     if (score < bestScore) {
       bestScore = score;
-      best = el;
+      best = i;
     }
-  }
-
-  if (!best) return false;
-  focusQuietly(best);
-  return true;
+  });
+  return best;
 }
 
 /**
