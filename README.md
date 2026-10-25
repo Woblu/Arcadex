@@ -322,6 +322,15 @@ one and not the other.
 loaded lists those checksums, which covers bad dumps and modified ROMs, but
 also any system you simply have not imported a DAT for.
 
+A scan does not hash anything over 512 MB, since reading every disc image in a
+library would turn a scan into an afternoon. That leaves most disc games with
+nothing to verify, so a game's panel offers **Checksum this file**: one file,
+read once, when you ask. The checksums it stores are the same ones a scan would
+have taken, so the game can then be verified against a DAT and matched by
+checksum on ScreenScraper the next time it is fetched. A console game kept as a
+folder has no single file to checksum; its serial (`BLUS30443`, read from its
+own metadata) is shown instead, and sent to ScreenScraper in place of one.
+
 ### ROM hacks
 
 Point Playdex at an IPS, UPS or BPS patch and it patches a *copy* of a ROM in
@@ -468,6 +477,12 @@ direction you pushed wins, weighted so travel along the axis beats drift across
 it. A new button or a whole new skin is navigable the moment it renders, with no
 second structure to keep in sync. Settings gets controller navigation for free.
 
+A pad the browser does not recognise often reports its D-pad as a single hat
+axis instead of four buttons: eight positions, a seventh of the axis apart,
+clockwise from up. Those are decoded position by position. (They used to be
+read as a fraction of a turn with the test the wrong way round, which sent
+every press on such a pad in the opposite direction.)
+
 The focus ring thickens while a pad is connected, since it has to be visible
 from a sofa.
 
@@ -577,7 +592,13 @@ byte for byte.
 npm install
 npm run tauri dev      # development
 npm run tauri build    # installer / bundled app
+
+npm test               # frontend tests
+cd src-tauri && cargo test
 ```
+
+`.github/workflows/test.yml` runs both on every push: the frontend once, the
+Rust tests on Linux and Windows.
 
 Needs Rust, and the platform's webview toolchain:
 
@@ -644,6 +665,20 @@ how many cores are there, so a wrong hit is obvious. The cores folder is
 inferred from the executable if you leave it blank. Paths are stripped of the
 quotes Explorer's "Copy as path" adds, both on save and on use.
 
+**Find emulators** does the same for standalone emulators. It looks in the
+places people unzip them - a folder called Emulators on any drive, the drive
+roots, Program Files, Downloads, Scoop, EmuDeck and ES-DE on Windows; the
+Applications folders on macOS; package paths, Flatpak exports and AppImages in
+`~/Applications` on Linux - and recognises each by its executable's name. A
+system you have games for that can only run on a standalone emulator, and has
+none set, is pointed at the first one found for it; anything already set is
+left alone, and the others are listed with a button to use them. It runs by
+itself when you open the tab with such a system unset.
+
+Recognising by name means telling an emulator from the programs that come with
+it: `DolphinTool`, `XeniaManager`, shadPS4's Qt launcher, `yuzu-cmd`. Those
+are not mistaken for the emulator.
+
 Per system you can override the core or switch to a standalone emulator:
 
 ```
@@ -671,7 +706,7 @@ than the ROM path:
 | Dolphin | `-b -e "{rom}"` |
 
 Anything else gets `"emulator" "{rom}"`. Either way the command can be edited
-after. `{rom}` is filled in after the command is split into arguments, so a
+after, and is saved when you leave the field rather than on every key. `{rom}` is filled in after the command is split into arguments, so a
 path with spaces is one argument whether or not the template quotes it.
 
 Playdex does not download or link to emulators, firmware or keys. RPCS3 needs
@@ -734,6 +769,7 @@ files and says so. An unsigned release is one no existing copy can install.
 ```
 src-tauri/src/
   lib.rs          app setup, media:// protocol, command registration
+  secrets.rs      passwords in the system credential store
   commands.rs     every command the UI can call
   db.rs           SQLite schema and queries
   scan.rs         folder walking, platform detection, title cleanup
@@ -745,7 +781,8 @@ src-tauri/src/
                   ISO 9660 and XDVDFS disc filesystems
   consoles.rs     games that are a folder: PARAM.SFO, param.json, meta.xml,
                   Xbox 360 packages
-  emulators.rs    standalone emulators and the arguments each one needs
+  emulators.rs    standalone emulators: finding them, and the arguments
+                  each one needs
   scrape/
     mod.rs        provider orchestration and fallback
     libretro.rs   artwork, no credentials needed
@@ -764,8 +801,11 @@ src/
   api.ts          typed wrappers over the Tauri commands
   gamepad.ts      pad polling and geometric focus movement
   update.ts       update check, download, install
-  skins/          the three layouts, and what they're all handed
+  skins/          the six layouts, and what they're all handed
   components/     grid, detail panel, settings, toasts, modals
+    settings/     one component per Settings tab
+    detail/       the game panel's longer sections
+  *.test.ts       frontend tests, run with `npm test`
 ```
 
 ## Where hacks come from
@@ -781,7 +821,6 @@ you.
 
 ## Ideas
 
-- **M3U grouping.** Collapse multi-disc games into one entry.
 - **Save state and screenshot browsing** per game.
 
 ## Notes
