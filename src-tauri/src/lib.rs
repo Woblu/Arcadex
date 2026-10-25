@@ -17,6 +17,7 @@ mod platforms;
 mod romcheck;
 mod saves;
 mod scan;
+mod secrets;
 mod signature;
 mod scrape;
 
@@ -30,6 +31,51 @@ pub struct AppState {
     pub media_root: PathBuf,
     pub scrape_running: AtomicBool,
     pub scrape_cancel: AtomicBool,
+    /// Where passwords and keys are kept, instead of the library database.
+    pub vault: secrets::Keychain,
+}
+
+/// The content type of an image the media protocol is allowed to hand the
+/// webview, or `None` for anything else.
+///
+/// Two things qualify, and both must be images. Artwork in the `media`
+/// folder, which is everything Playdex downloaded or was given. And the
+/// thumbnail RetroArch writes beside a save state, `<rom>.state1.png` next to
+/// `<rom>.state1`, which lives in RetroArch's own folders.
+///
+/// The app data folder as a whole does not qualify. It holds the library
+/// database, and a protocol that would read that out to any page in the
+/// webview is a way for one bad description to leak everything in it.
+fn servable(path: &std::path::Path, data_dir: &std::path::Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        _ => return None,
+    };
+    let real = path.canonicalize().ok()?;
+
+    let in_media = data_dir
+        .join("media")
+        .canonicalize()
+        .map(|media| real.starts_with(media))
+        .unwrap_or(false);
+
+    // `.state`, `.state3`, `.state.auto`: whatever the slot, the name of the
+    // state itself carries `.state`, and it has to be really there.
+    let state = real.with_extension("");
+    let state_thumbnail = ext == "png"
+        && state
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map_or(false, |n| n.to_ascii_lowercase().contains(".state"))
+        && state.is_file();
+
+    (in_media || state_thumbnail).then_some(mime)
 }
 
 /// Turn a cached artwork path into a URL the webview can load.
@@ -51,34 +97,13 @@ fn media_protocol_response(
     };
 
     let path = PathBuf::from(decoded);
-
-    // This protocol only ever serves artwork we downloaded ourselves.
-    let inside_cache = path
-        .canonicalize()
-        .ok()
-        .zip(media_root.canonicalize().ok())
-        .map(|(p, root)| p.starts_with(root))
-        .unwrap_or(false);
-    if !inside_cache {
+    let Some(mime) = servable(&path, media_root) else {
         return not_found();
-    }
+    };
 
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
         Err(_) => return not_found(),
-    };
-
-    let mime = match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => "image/png",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        _ => "image/jpeg",
     };
 
     tauri::http::Response::builder()
@@ -216,6 +241,16 @@ pub fn run() {
                 }
             }
 
+            // Passwords an earlier version kept in the database go to the
+            // system's credential store. Anything the store will not take
+            // stays where it was, and is tried again next time.
+            let vault = secrets::Keychain::new(&app.config().identifier);
+            match secrets::migrate(&conn, &vault) {
+                Ok(0) => {}
+                Ok(n) => eprintln!("moved {n} saved passwords to the credential store"),
+                Err(e) => eprintln!("could not move saved passwords: {e}"),
+            }
+
             app.manage(db::Db(std::sync::Arc::new(Mutex::new(conn))));
 
             let media_root = data_dir.clone();
@@ -232,6 +267,7 @@ pub fn run() {
                 media_root,
                 scrape_running: AtomicBool::new(false),
                 scrape_cancel: AtomicBool::new(false),
+                vault,
             });
 
             Ok(())
@@ -307,6 +343,78 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::servable;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "playdex-media-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn serves_artwork_and_nothing_else_in_the_data_folder() {
+        let data = scratch("scope");
+        let art = data.join("media").join("1").join("cover.webp");
+        std::fs::create_dir_all(art.parent().unwrap()).unwrap();
+        std::fs::write(&art, b"art").unwrap();
+        assert_eq!(servable(&art, &data), Some("image/webp"));
+
+        // The library itself sits one folder up, and is the thing worth
+        // protecting: it holds every setting.
+        let db = data.join("library.db");
+        std::fs::write(&db, b"SQLite format 3").unwrap();
+        assert_eq!(servable(&db, &data), None);
+
+        // Renaming it to look like a picture does not get it out either.
+        let disguised = data.join("library.png");
+        std::fs::write(&disguised, b"SQLite format 3").unwrap();
+        assert_eq!(servable(&disguised, &data), None);
+
+        // Nor does climbing out of the media folder.
+        let climb = data.join("media").join("..").join("library.db");
+        assert_eq!(servable(&climb, &data), None);
+
+        // And inside it, only images.
+        let text = data.join("media").join("1").join("notes.txt");
+        std::fs::write(&text, b"x").unwrap();
+        assert_eq!(servable(&text, &data), None);
+
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// RetroArch writes a state's thumbnail beside it, in its own folders.
+    #[test]
+    fn serves_a_save_states_thumbnail_where_retroarch_left_it() {
+        let data = scratch("states-data");
+        let states = scratch("states");
+        for name in ["Zelda.state1", "Zelda.state.auto"] {
+            std::fs::write(states.join(name), b"state").unwrap();
+            let shot = states.join(format!("{name}.png"));
+            std::fs::write(&shot, b"png").unwrap();
+            assert_eq!(servable(&shot, &data), Some("image/png"), "{name}");
+        }
+
+        // A picture with no state beside it is just a picture somewhere on
+        // disk, and not ours to hand out.
+        let orphan = states.join("Mario.state2.png");
+        std::fs::write(&orphan, b"png").unwrap();
+        assert_eq!(servable(&orphan, &data), None);
+        let holiday = states.join("holiday.png");
+        std::fs::write(&holiday, b"png").unwrap();
+        assert_eq!(servable(&holiday, &data), None);
+
+        let _ = std::fs::remove_dir_all(&data);
+        let _ = std::fs::remove_dir_all(&states);
+    }
 }
 
 #[cfg(test)]

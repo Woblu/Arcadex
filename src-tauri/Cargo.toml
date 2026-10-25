@@ -42,4 +42,5 @@ futures-util = "0.3.34"
 tauri-plugin-updater = "2.11.0"
 tauri-plugin-process = "2.3.1"
 quick-xml = "0.42.0"
+keyring = "4.2.0"
 

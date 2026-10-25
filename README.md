@@ -286,7 +286,16 @@ from a pad's X button and the footer's Options button, since the tile is the
 thing a mouse user points at.
 
 Artwork downloads once into the app data directory and is served to the UI over
-a private `media://` protocol scoped to that directory.
+a private `media://` protocol. It serves images and nothing else: anything in
+the `media` folder, and the thumbnail RetroArch writes beside a save state. The
+rest of the app data directory, the library database included, is out of its
+reach.
+
+The UI runs under a content security policy that allows only its own scripts,
+images from itself and that protocol, and no outside network at all. Every
+download happens in Rust. A description or title a metadata provider sends is
+data shown as text, and the policy means that even a bug that let one be read
+as markup would have nothing to load and nowhere to send anything.
 
 ### Verifying dumps
 
@@ -587,7 +596,20 @@ them has finished, so a release never ships missing somebody's installer.
 
 Both providers are optional. Artwork works with no credentials at all through
 libretro-thumbnails; these two add the text metadata it can't supply. Enter them
-under **Settings → Metadata**. They're stored in the local SQLite database.
+under **Settings → Metadata**.
+
+The passwords and the API key go to the system's credential store: the
+Credential Manager on Windows, the Keychain on macOS, the Secret Service on
+Linux. The library database is a file that gets copied into backups and synced
+folders along with everything else, which is no place for a password. Where no
+store is available, such as a Linux session with no Secret Service running,
+they stay in the database as before rather than failing to save. A library from
+an earlier version moves them over on its next start.
+
+On macOS, an unsigned build is a new program as far as the Keychain is
+concerned each time it updates, so the first fetch after an update may ask
+whether Playdex can use the saved password. **Always Allow** answers it until
+the next one.
 
 **ScreenScraper** (`screenscraper.fr`) needs two logins, which people often
 confuse:

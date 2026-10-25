@@ -358,7 +358,7 @@ async fn run_scrape(
         } else {
             db::games_needing_scrape(&conn, platform.as_deref())?
         };
-        let settings = db::all_settings(&conn)?;
+        let settings = crate::secrets::all_settings(&conn, &app.state::<AppState>().vault)?;
         (games, scrape::Credentials::from_settings(&settings))
     };
 
@@ -446,7 +446,7 @@ pub async fn scrape_one(app: AppHandle, id: i64) -> Result<String> {
         let conn = db.0.lock().unwrap();
         let game = db::get_game(&conn, id)?
             .ok_or_else(|| AppError::Other("Game not found".into()))?;
-        let settings = db::all_settings(&conn)?;
+        let settings = crate::secrets::all_settings(&conn, &app.state::<AppState>().vault)?;
         (game, scrape::Credentials::from_settings(&settings))
     };
 
@@ -537,13 +537,19 @@ fn open_in_file_manager(dir: &std::path::Path) -> Result<()> {
 // ------------------------------------------------------------ settings
 
 #[tauri::command]
-pub fn get_settings(db: State<Db>) -> Result<HashMap<String, String>> {
+pub fn get_settings(db: State<Db>, state: State<AppState>) -> Result<HashMap<String, String>> {
     let conn = db.0.lock().unwrap();
-    db::all_settings(&conn)
+    crate::secrets::all_settings(&conn, &state.vault)
 }
 
+/// Passwords and keys go to the system's credential store; everything else
+/// to the library database.
 #[tauri::command]
-pub fn save_settings(db: State<Db>, values: HashMap<String, String>) -> Result<()> {
+pub fn save_settings(
+    db: State<Db>,
+    state: State<AppState>,
+    values: HashMap<String, String>,
+) -> Result<()> {
     let conn = db.0.lock().unwrap();
     for (k, v) in values {
         // Paths arrive with the quotes Explorer's "Copy as path" wraps them in.
@@ -552,7 +558,7 @@ pub fn save_settings(db: State<Db>, values: HashMap<String, String>) -> Result<(
         } else {
             v
         };
-        db::set_setting(&conn, &k, &value)?;
+        crate::secrets::save(&conn, &state.vault, &k, &value)?;
     }
     Ok(())
 }
@@ -847,7 +853,10 @@ pub async fn test_credentials(app: AppHandle) -> Result<Vec<scrape::ProviderStat
     let creds = {
         let db = app.state::<Db>();
         let conn = db.0.lock().unwrap();
-        scrape::Credentials::from_settings(&db::all_settings(&conn)?)
+        scrape::Credentials::from_settings(&crate::secrets::all_settings(
+            &conn,
+            &app.state::<AppState>().vault,
+        )?)
     };
     Ok(scrape::check_credentials(&client, &creds).await)
 }

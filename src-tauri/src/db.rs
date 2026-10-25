@@ -847,6 +847,11 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn delete_setting(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
 pub fn all_settings(conn: &Connection) -> Result<std::collections::HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
