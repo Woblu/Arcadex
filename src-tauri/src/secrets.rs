@@ -120,6 +120,38 @@ pub fn migrate(conn: &rusqlite::Connection, vault: &dyn Vault) -> Result<usize> 
     Ok(moved)
 }
 
+/// Carry secrets saved under an earlier name of the app across to this one.
+///
+/// The credential store files each secret under the app's identifier, so a
+/// rename leaves them behind under the old name, and the new one comes up
+/// asking for passwords it was already given. Each secret is copied only when
+/// this name has none of its own.
+///
+/// The old copy is removed only when `retire` says the old name has no
+/// library left to use it - the library has moved here - and only once this
+/// name holds a value of its own. A test build, or an older version still
+/// installed and still holding its library, keeps its copy.
+///
+/// Returns how many were copied.
+pub fn adopt(from: &dyn Vault, to: &dyn Vault, retire: bool) -> usize {
+    let mut copied = 0;
+    for key in SECRET_KEYS {
+        let Some(value) = from.get(key) else {
+            continue;
+        };
+        if to.get(key).is_none() {
+            if !to.set(key, &value) || to.get(key).as_deref() != Some(value.as_str()) {
+                continue;
+            }
+            copied += 1;
+        }
+        if retire {
+            from.delete(key);
+        }
+    }
+    copied
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -157,7 +189,7 @@ pub(crate) mod tests {
     }
 
     fn library(tag: &str) -> (std::path::PathBuf, rusqlite::Connection) {
-        let dir = std::env::temp_dir().join(format!("playdex-secrets-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("arcadex-secrets-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let conn = db::open(&dir.join("library.db")).unwrap();
@@ -216,7 +248,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore]
     fn the_systems_keychain_round_trips() {
-        let vault = Keychain::new("com.boazv.playdex.selftest");
+        let vault = Keychain::new("com.boazv.arcadex.selftest");
         assert!(vault.set("tgdb_key", "round trip"), "the store refused a write");
         assert_eq!(vault.get("tgdb_key").as_deref(), Some("round trip"));
         assert!(vault.delete("tgdb_key"));
@@ -231,7 +263,7 @@ pub(crate) mod tests {
         let (dir, conn) = library("migrate");
         db::set_setting(&conn, "ss_devpassword", "devpass").unwrap();
         db::set_setting(&conn, "tgdb_key", "").unwrap();
-        db::set_setting(&conn, "ss_devid", "playdex").unwrap();
+        db::set_setting(&conn, "ss_devid", "arcadex").unwrap();
         let vault = MemoryVault::default();
 
         assert_eq!(migrate(&conn, &vault).unwrap(), 1);
@@ -239,12 +271,71 @@ pub(crate) mod tests {
         assert_eq!(db::get_setting(&conn, "tgdb_key").unwrap(), None);
         assert_eq!(vault.get("ss_devpassword").as_deref(), Some("devpass"));
         // Not a secret, so not moved.
-        assert_eq!(db::get_setting(&conn, "ss_devid").unwrap().as_deref(), Some("playdex"));
+        assert_eq!(db::get_setting(&conn, "ss_devid").unwrap().as_deref(), Some("arcadex"));
 
         // Running again finds nothing left to do.
         assert_eq!(migrate(&conn, &vault).unwrap(), 0);
 
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn holding(pairs: &[(&str, &str)]) -> MemoryVault {
+        let vault = MemoryVault::default();
+        for (k, v) in pairs {
+            vault.set(k, v);
+        }
+        vault
+    }
+
+    /// After a rename, passwords saved under the old name come along, and
+    /// the old copies go once the library has moved too.
+    #[test]
+    fn a_rename_carries_saved_passwords_across() {
+        let old = holding(&[("ss_password", "hunter2"), ("tgdb_key", "abc")]);
+        let new = MemoryVault::default();
+
+        assert_eq!(adopt(&old, &new, true), 2);
+        assert_eq!(new.get("ss_password").as_deref(), Some("hunter2"));
+        assert_eq!(new.get("tgdb_key").as_deref(), Some("abc"));
+        assert_eq!(old.get("ss_password"), None);
+        assert_eq!(old.get("tgdb_key"), None);
+    }
+
+    /// One typed in since the rename is newer than the one left behind.
+    #[test]
+    fn a_password_given_since_the_rename_is_kept() {
+        let old = holding(&[("ss_password", "old")]);
+        let new = holding(&[("ss_password", "new")]);
+
+        assert_eq!(adopt(&old, &new, true), 0);
+        assert_eq!(new.get("ss_password").as_deref(), Some("new"));
+        // The stale one is tidied away all the same.
+        assert_eq!(old.get("ss_password"), None);
+    }
+
+    /// While the old name still has its library - a test build, or the old
+    /// version still in use - it keeps its own copy.
+    #[test]
+    fn the_old_copy_stays_while_the_old_name_still_has_a_library() {
+        let old = holding(&[("tgdb_key", "abc")]);
+        let new = MemoryVault::default();
+
+        assert_eq!(adopt(&old, &new, false), 1);
+        assert_eq!(new.get("tgdb_key").as_deref(), Some("abc"));
+        assert_eq!(old.get("tgdb_key").as_deref(), Some("abc"));
+    }
+
+    /// A store that will not take the copy leaves the original where it was.
+    #[test]
+    fn nothing_is_removed_when_the_copy_did_not_take() {
+        let old = holding(&[("ss_devpassword", "dev")]);
+        let new = MemoryVault {
+            broken: true,
+            ..Default::default()
+        };
+
+        assert_eq!(adopt(&old, &new, true), 0);
+        assert_eq!(old.get("ss_devpassword").as_deref(), Some("dev"));
     }
 }

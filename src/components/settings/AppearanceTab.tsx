@@ -45,7 +45,7 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
     try {
       const found = await checkForUpdate(true);
       if (found) setUpdate(found);
-      else setUpdateNote("Playdex is up to date.");
+      else setUpdateNote("Arcadex is up to date.");
     } catch (err) {
       // A button press deserves the real reason — no endpoint yet, no
       // network, a release without a manifest.
@@ -95,7 +95,7 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
       <div className="section-title">About</div>
       <div className="about-row">
         <div>
-          <div className="about-version">Playdex {version || "…"}</div>
+          <div className="about-version">Arcadex {version || "…"}</div>
           <div className="hint">
             Updates are downloaded from the project&apos;s releases and checked
             against a signature before anything is installed.
@@ -114,7 +114,7 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
 
       {update && (
         <div className="notice" style={{ marginTop: 10 }}>
-          <strong>Playdex {update.version} is available.</strong>
+          <strong>Arcadex {update.version} is available.</strong>
           {update.notes && (
             <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{update.notes}</div>
           )}
@@ -128,7 +128,7 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
           {download.phase === "downloading" || download.phase === "installing" ? (
             <div className="hint" style={{ marginTop: 8 }}>
               {download.phase === "installing"
-                ? "Installing — Playdex will restart."
+                ? "Installing — Arcadex will restart."
                 : download.total
                   ? `Downloading ${formatBytes(download.received)} of ${formatBytes(download.total)}…`
                   : `Downloading ${formatBytes(download.received)}…`}

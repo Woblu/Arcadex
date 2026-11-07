@@ -25,7 +25,7 @@ request shows within a few minutes whether it builds everywhere.
 - **Tests are named for the behaviour, in a sentence.**
   `a_drive_that_is_not_there_is_not_a_deleted_library`, not
   `test_missing_2`. A failing test should say what broke.
-- **Nothing is deleted on a guess.** Playdex only ever removes a file of
+- **Nothing is deleted on a guess.** Arcadex only ever removes a file of
   yours when asked directly, and says so first. A heuristic that drops a
   library entry leaves anything played, favourited or patched alone.
 - **Slow work stays off the main thread.** A Tauri command that is not
@@ -34,7 +34,7 @@ request shows within a few minutes whether it builds everywhere.
 - **Plain words in the interface.** "Unpack and keep only the game", not
   "Extract archive (destructive)".
 
-## What Playdex will not do
+## What Arcadex will not do
 
 Pull requests that search for, download or link to games, BIOS files,
 firmware, decryption keys or dumping tools will be closed, as will ones that

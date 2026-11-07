@@ -325,7 +325,7 @@ async fn check_screenscraper(client: &reqwest::Client, creds: &Credentials) -> P
     let mut query: Vec<(&str, String)> = vec![
         ("devid", creds.ss_devid.clone()),
         ("devpassword", creds.ss_devpassword.clone()),
-        ("softname", "playdex".to_string()),
+        ("softname", "arcadex".to_string()),
         ("output", "json".to_string()),
     ];
     if !creds.ss_user.is_empty() {

@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn finds_saves_next_to_the_rom_when_nothing_is_configured() {
-        let dir = std::env::temp_dir().join(format!("playdex-saves-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("arcadex-saves-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn backs_up_into_a_dated_folder() {
-        let dir = std::env::temp_dir().join(format!("playdex-bk-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("arcadex-bk-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("Game.srm");

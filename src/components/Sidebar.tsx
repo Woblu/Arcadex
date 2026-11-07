@@ -34,7 +34,7 @@ export default function Sidebar({
     <aside className="sidebar">
       <div className="brand">
         <Logo size={22} className="brand-mark" />
-        Playdex
+        Arcadex
       </div>
 
       <div className="sidebar-scroll">

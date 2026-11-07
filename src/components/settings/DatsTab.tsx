@@ -19,14 +19,14 @@ export default function DatsTab({ active }: TabProps) {
     <>
       <div className="notice">
         A DAT is a catalogue of known-good dumps: for every release of a
-        system, its exact size and checksums. Import one and Playdex can tell
+        system, its exact size and checksums. Import one and Arcadex can tell
         you which of your files are correct dumps and which are not, on the
         hashes it already computes for everything.
         <br />
         <br />
         No-Intro covers cartridge systems and Redump covers discs. Neither
         offers an API, so the files come from you: download the DAT for a
-        system once and point Playdex at it.
+        system once and point Arcadex at it.
       </div>
 
       <div className="row" style={{ marginTop: 12 }}>

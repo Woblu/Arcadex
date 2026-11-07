@@ -9,7 +9,7 @@ problem is understood. Say whether you would like to be credited.
 
 ## What counts
 
-Playdex runs programs - emulators - with paths and arguments it builds, reads
+Arcadex runs programs - emulators - with paths and arguments it builds, reads
 files from anywhere you point it, fetches artwork from the internet and
 updates itself. A problem in any of that is in scope:
 
@@ -27,7 +27,7 @@ services belong to those projects.
 - Updates are verified against a public key compiled into the app before
   any of it runs.
 - Release builds carry a provenance attestation:
-  `gh attestation verify <file> --repo Woblu/Playdex`.
+  `gh attestation verify <file> --repo Woblu/Arcadex`.
 - The interface runs under a content security policy with no outside
   network access; every download happens in Rust.
 - The private media protocol serves images only, from the artwork folder.

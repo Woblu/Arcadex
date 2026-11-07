@@ -145,12 +145,17 @@ const GAME_COLS: &str = "id, path, filename, platform, size, crc32, md5, sha1, i
 /// one of those paths goes stale at once: the files are all still there under
 /// the new name, but nothing in the library points at them any more.
 ///
-/// This rewrites the directory segment in place, wherever it appears. It
-/// sweeps every column of every table rather than a fixed list, because the
-/// set of columns holding such a path has grown before and the `LIKE` guard
-/// means a column that never held one is never written to. Values that do not
-/// mention the old directory are left exactly as they were, which is what
-/// makes it safe to run against a library with nothing to fix.
+/// This rewrites the directory segment in place, wherever it appears as a
+/// whole folder name: between two separators, or at the very end. A name that
+/// merely starts the same - `com.boazv.playdex.verify` is not
+/// `com.boazv.playdex` - is a different folder and is left alone. Matching is
+/// case-sensitive, so what is counted is what was changed.
+///
+/// It sweeps every column of every table rather than a fixed list, because
+/// the set of columns holding such a path has grown before, and the match
+/// guard means a column that never held one is never written to. Values that
+/// do not mention the old directory are left exactly as they were, which is
+/// what makes it safe to run against a library with nothing to fix.
 ///
 /// Idempotent: once it has run nothing matches, and it costs a single query.
 /// Returns how many values were rewritten.
@@ -158,20 +163,31 @@ pub fn repoint_data_dir(conn: &Connection, old_dir: &str, new_dir: &str) -> Resu
     if old_dir == new_dir || old_dir.is_empty() {
         return Ok(0);
     }
-    let pattern = format!("%{old_dir}%");
+    let segments: Vec<(String, String)> = ["\\", "/"]
+        .iter()
+        .map(|sep| (format!("{sep}{old_dir}"), format!("{sep}{new_dir}")))
+        .collect();
+    // Within a path, the folder name has a separator on both sides; at the
+    // end of one, only before it.
+    let within = |col: &str| format!("instr({col}, ?1 || substr(?1, 1, 1)) > 0");
+    let at_end = |col: &str| format!("substr({col}, -length(?1)) = ?1");
 
     // The cheap check first, so an ordinary launch costs one query rather than
     // a scan of every column in the database. If it cannot be answered the
     // sweep runs anyway, since being slow once beats leaving a library broken.
-    let stale: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM games
-             WHERE cover_path LIKE ?1 OR screenshot_path LIKE ?1
-                OR logo_path LIKE ?1 OR path LIKE ?1)",
-            params![&pattern],
+    let stale = segments.iter().any(|(old, _)| {
+        let any_of = ["cover_path", "screenshot_path", "logo_path", "path"]
+            .iter()
+            .map(|c| format!("{} OR {}", within(c), at_end(c)))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        conn.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM games WHERE {any_of})"),
+            params![old],
             |row| row.get(0),
         )
-        .unwrap_or(true);
+        .unwrap_or(true)
+    });
     if !stale {
         return Ok(0);
     }
@@ -189,13 +205,23 @@ pub fn repoint_data_dir(conn: &Connection, old_dir: &str, new_dir: &str) -> Resu
             .collect::<rusqlite::Result<Vec<String>>>()?;
 
         for column in columns {
-            // A numeric column can never satisfy the LIKE, so tables holding
-            // no paths at all are read and then left alone.
-            let sql = format!(
-                "UPDATE \"{table}\" SET \"{column}\" = replace(\"{column}\", ?1, ?2) \
-                 WHERE \"{column}\" LIKE ?3"
-            );
-            rewritten += conn.execute(&sql, params![old_dir, new_dir, &pattern])?;
+            let col = format!("\"{column}\"");
+            for (old, new) in &segments {
+                // ?1 is `\old` or `/old`; with its own separator appended it
+                // is the folder in the middle of a path.
+                let middle = format!(
+                    "UPDATE \"{table}\" SET {col} = replace({col}, ?1 || substr(?1, 1, 1), \
+                     ?2 || substr(?2, 1, 1)) WHERE {}",
+                    within(&col)
+                );
+                rewritten += conn.execute(&middle, params![old, new])?;
+                let end = format!(
+                    "UPDATE \"{table}\" SET {col} = substr({col}, 1, length({col}) - length(?1)) || ?2 \
+                     WHERE {}",
+                    at_end(&col)
+                );
+                rewritten += conn.execute(&end, params![old, new])?;
+            }
         }
     }
 
@@ -782,7 +808,7 @@ pub fn reindex_game(
 
 /// Describe an existing row as the console game it turns out to be.
 ///
-/// A PlayStation 3 `EBOOT.BIN` indexed before Playdex knew the system was
+/// A PlayStation 3 `EBOOT.BIN` indexed before Arcadex knew the system was
 /// filed as an unidentified `.bin` called "EBOOT". The folder around it says
 /// what it really is, and that outranks what the row was guessed to be - a
 /// platform picked by hand for a file called EBOOT was picked for want of a
@@ -1335,13 +1361,14 @@ pub fn longest_session(conn: &Connection) -> Result<i64> {
 mod repoint_tests {
     use super::{open, repoint_data_dir};
 
-    // The rename went Playdex -> Romcade and then back again, so the direction
-    // under test is from whichever name a library was last saved under.
-    const OLD: &str = "com.boazv.romcade";
-    const NEW: &str = "com.boazv.playdex";
+    // The app has been Playdex, Romcade, Playdex again and now Arcadex; the
+    // direction under test is from whichever name a library was last saved
+    // under to the current one.
+    const OLD: &str = "com.boazv.playdex";
+    const NEW: &str = "com.boazv.arcadex";
 
     fn library() -> (scratch::Guard, rusqlite::Connection) {
-        let dir = scratch::Guard::new("playdex-repoint");
+        let dir = scratch::Guard::new("arcadex-repoint");
         let conn = open(&dir.path().join("library.db")).unwrap();
         (dir, conn)
     }
@@ -1411,6 +1438,51 @@ mod repoint_tests {
         assert_eq!(repoint_data_dir(&conn, NEW, NEW).unwrap(), 0);
     }
 
+    /// A test build runs under `com.boazv.playdex.verify`. Its paths begin
+    /// with the old name but are another folder entirely, and rewriting them
+    /// would point its artwork at a folder that is not there.
+    #[test]
+    fn a_folder_whose_name_only_starts_the_same_is_left_alone() {
+        let (_dir, conn) = library();
+        let other = format!(r"C:\x\{OLD}.verify\media\5\cover.jpg");
+        insert_game(&conn, 5, r"D:\roms\b.nes", Some(&other));
+
+        assert_eq!(repoint_data_dir(&conn, OLD, NEW).unwrap(), 0);
+
+        let cover: String = conn
+            .query_row("SELECT cover_path FROM games WHERE id = 5", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cover, other);
+    }
+
+    /// macOS and Linux paths, and a setting that names the folder itself.
+    #[test]
+    fn rewrites_forward_slashes_and_the_folder_at_the_end_of_a_value() {
+        let (_dir, conn) = library();
+        insert_game(
+            &conn,
+            6,
+            "/home/me/roms/c.nes",
+            Some(&format!("/home/me/.local/share/{OLD}/media/6/cover.png")),
+        );
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('somewhere', ?1)",
+            [format!(r"C:\x\{OLD}")],
+        )
+        .unwrap();
+
+        assert_eq!(repoint_data_dir(&conn, OLD, NEW).unwrap(), 2);
+
+        let cover: String = conn
+            .query_row("SELECT cover_path FROM games WHERE id = 6", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cover, format!("/home/me/.local/share/{NEW}/media/6/cover.png"));
+        let setting: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'somewhere'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(setting, format!(r"C:\x\{NEW}"));
+    }
+
     /// A directory that removes itself, so each test gets its own library.
     mod scratch {
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -1447,7 +1519,7 @@ mod scrape_candidate_tests {
     use super::{games_for_rescrape, games_needing_scrape, open};
 
     fn library() -> (scratch2::Guard, rusqlite::Connection) {
-        let dir = scratch2::Guard::new("playdex-scrape");
+        let dir = scratch2::Guard::new("arcadex-scrape");
         let conn = open(&dir.path().join("library.db")).unwrap();
         (dir, conn)
     }
@@ -1552,7 +1624,7 @@ mod custom_cover_tests {
     use super::{apply_metadata, clear_custom_cover, open, set_custom_cover, Metadata};
 
     fn library() -> (scratch3::Guard, rusqlite::Connection) {
-        let dir = scratch3::Guard::new("playdex-cover");
+        let dir = scratch3::Guard::new("arcadex-cover");
         let conn = open(&dir.path().join("library.db")).unwrap();
         conn.execute(
             "INSERT INTO games (id, path, filename, title, added_at, platform, scrape_status)
@@ -1674,7 +1746,7 @@ mod rename_and_borrow_tests {
     use super::{apply_metadata, borrow_metadata, open, rename_game, Metadata};
 
     fn library() -> (scratch4::Guard, rusqlite::Connection) {
-        let dir = scratch4::Guard::new("playdex-rename");
+        let dir = scratch4::Guard::new("arcadex-rename");
         let conn = open(&dir.path().join("library.db")).unwrap();
         conn.execute(
             "INSERT INTO games (id, path, filename, title, added_at, platform, scrape_status,
@@ -1817,7 +1889,7 @@ mod removal_tests {
     use super::*;
 
     fn library(tag: &str) -> (std::path::PathBuf, Connection) {
-        let dir = std::env::temp_dir().join(format!("playdex-remove-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("arcadex-remove-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let conn = open(&dir.join("library.db")).unwrap();
@@ -1882,8 +1954,8 @@ mod removal_tests {
         add(&conn, 1, &here.to_string_lossy(), "");
         add(&conn, 2, &dir.join("deleted.sfc").to_string_lossy(), "");
         // A share no machine on earth has.
-        add(&conn, 3, r"\playdex-no-such-host\roms\game.sfc", "");
-        add_folder(&conn, r"\playdex-no-such-host\roms", None).unwrap();
+        add(&conn, 3, r"\arcadex-no-such-host\roms\game.sfc", "");
+        add_folder(&conn, r"\arcadex-no-such-host\roms", None).unwrap();
 
         let (missing, unreachable) = missing_entries(&conn).unwrap();
         assert_eq!(missing, vec![2]);

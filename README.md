@@ -1,6 +1,6 @@
-# Playdex
+# Arcadex
 
-[playdex website](https://woblu.github.io/Playdex/) · [download](https://github.com/Woblu/Playdex/releases/latest)
+[arcadex website](https://woblu.github.io/Arcadex/) · [download](https://github.com/Woblu/Arcadex/releases/latest)
 
 A ROM library manager and emulator launcher. Point it at the folders where you
 keep your ROMs. It identifies each one, pulls down cover art and details, and
@@ -11,12 +11,34 @@ Tauri 2 (Rust) + React + TypeScript, with SQLite for the library.
 
 ## Scope
 
-Playdex indexes ROMs you already have on disk. It doesn't search for or
+Arcadex indexes ROMs you already have on disk. It doesn't search for or
 download games. ScreenScraper and TheGamesDB are metadata databases: they serve
 artwork and descriptions for games they can identify, not the games themselves.
 
 ROM hacks are a different thing and are supported. A patch contains only the
 hack author's own changes; the base ROM comes from you.
+
+## Coming from Playdex
+
+Arcadex was called Playdex up to 0.15. The first time Arcadex starts, it moves
+your library into its own data folder: the database with your playtime and
+favourites, artwork, imported patches, disc playlists and the unpack cache.
+Saved passwords move across in the system's credential store the same way.
+Nothing is copied twice and nothing is deleted.
+
+| | Playdex kept it in | Arcadex keeps it in |
+| --- | --- | --- |
+| Windows | `%APPDATA%\com.boazv.playdex` | `%APPDATA%\com.boazv.arcadex` |
+| macOS | `~/Library/Application Support/com.boazv.playdex` | `~/Library/Application Support/com.boazv.arcadex` |
+| Linux | `~/.local/share/com.boazv.playdex` | `~/.local/share/com.boazv.arcadex` |
+
+If you want a copy first, close Playdex and copy `library.db` out of the old
+folder before starting Arcadex.
+
+On Windows the update installs Arcadex beside Playdex rather than over it,
+because the installer is named after the app. Once Arcadex has opened your
+library, uninstall Playdex from **Settings → Apps**. Starting Playdex again
+after the move shows an empty library: nothing is lost, it is all in Arcadex.
 
 ## What it does
 
@@ -79,7 +101,7 @@ for those rules to drift.
 A disc game that has not been zipped is usually a folder holding a playlist and
 its tracks: `Final Fantasy VII.cue` beside three or four `.bin` files. That is
 one game, and the cue is the part an emulator wants, so that is the part
-Playdex indexes. Tracks named by a playlist in the same folder are skipped, as
+Arcadex indexes. Tracks named by a playlist in the same folder are skipped, as
 is any leftover track-shaped file sitting beside one, since dumps get renamed
 and a stray `.bin` next to a cue sheet was never a second game.
 
@@ -190,7 +212,7 @@ why.
 ### Platform detection
 
 `.bin`, `.cue`, `.iso`, `.chd` and `.zip` are shared across a dozen systems, so
-extensions alone don't settle it. Playdex works through this order:
+extensions alone don't settle it. Arcadex works through this order:
 
 1. The platform assigned to the library folder, if you set one
 2. An extension only one system uses (`.sfc`, `.gba`, `.nes`)
@@ -268,7 +290,7 @@ exactly instead of by fuzzy name. If it has no match or its quota is spent,
 TheGamesDB is tried by name: results are scored against the cleaned-up title,
 boosted when the platform agrees, and a weak match is discarded rather than
 guessed at. Both providers report which system they matched, which fills in a
-platform Playdex couldn't work out on its own. A platform already on the record
+platform Arcadex couldn't work out on its own. A platform already on the record
 is left alone since you may have set it by hand.
 
 ### Artwork you supply yourself
@@ -328,7 +350,7 @@ checksums. Import one under **Settings → Verification** and every game's panel
 says whether its checksums match a catalogued dump, whether nothing in the
 catalogue has them, or whether it was too large to have been hashed at all.
 
-This is what all the hashing was for. Playdex already computes CRC32, MD5 and
+This is what all the hashing was for. Arcadex already computes CRC32, MD5 and
 SHA-1 for everything in one pass, and hashes the ROM *inside* an archive rather
 than the archive, which is exactly what a DAT indexes — so checking is close to
 a database join.
@@ -357,11 +379,11 @@ own metadata) is shown instead, and sent to ScreenScraper in place of one.
 
 ### ROM hacks
 
-Point Playdex at an IPS, UPS or BPS patch and it patches a *copy* of a ROM in
+Point Arcadex at an IPS, UPS or BPS patch and it patches a *copy* of a ROM in
 your library. The original is never modified. The result is added as its own
 game with its own title, art, saves and playtime.
 
-UPS and BPS embed the CRC32 of the ROM they were built against, and Playdex
+UPS and BPS embed the CRC32 of the ROM they were built against, and Arcadex
 already hashes everything during scanning, so a mismatch is caught before
 patching rather than producing a corrupt game:
 
@@ -431,7 +453,7 @@ unpacked file out of the cache into the folder the archive lived in, repoints
 the library entry, and then deletes the archive. That order is the design — the
 replacement is in place and checked before anything is removed, and moving it
 out of the cache puts it beyond the reach of eviction, which would otherwise be
-free to delete the only remaining copy. It is the one thing in Playdex that
+free to delete the only remaining copy. It is the one thing in Arcadex that
 deletes a file of yours, and it only happens when asked for directly.
 
 For an archived console game it keeps the whole game rather than one file. An
@@ -456,7 +478,7 @@ prepping a ROM you plan to start from RetroArch directly.
 ### Saves
 
 Save files and save states are listed together, with RetroArch's state
-thumbnails where it wrote them. Playdex looks in the configured save
+thumbnails where it wrote them. Arcadex looks in the configured save
 directories, the per-core subfolders RetroArch creates when sorting is on, and
 the ROM's own folder. Back up copies everything into a dated folder. Only save
 states can be deleted; battery saves hold real progress and are refused.
@@ -465,7 +487,7 @@ states can be deleted; battery saves hold real progress and are refused.
 
 Six layouts, under **Settings → Appearance**:
 
-- **Playdex**: the desktop view. Sidebar, sortable grid, detail panel.
+- **Arcadex**: the desktop view. Sidebar, sortable grid, detail panel.
 - **Console**: a home screen. One row of large icons sized against the window,
   a caption underneath, and a row of small round system buttons that each go
   somewhere different, including an "All software" grid.
@@ -539,7 +561,7 @@ game.
 
 ### Updates
 
-Playdex checks for a new version a few seconds after launch, once the library
+Arcadex checks for a new version a few seconds after launch, once the library
 has drawn, so a slow or unreachable endpoint never delays startup. If it finds
 one it says so in a corner card with the release notes. Nothing downloads until
 you accept.
@@ -553,7 +575,7 @@ of it runs, so a tampered or mis-hosted file is refused rather than installed.
 
 ## Windows may delete the installer
 
-Windows Defender sometimes removes Playdex, usually reporting
+Windows Defender sometimes removes Arcadex, usually reporting
 **PUA:Win32/Packunwan** or a machine-learning name like *Trojan:Win32/Wacatac*.
 It is a false positive, and it comes from three things about the build rather
 than anything it does:
@@ -592,11 +614,11 @@ maintained, is already released in the form being signed, and describes what it
 does on its download page. The team doing the signing has to be the team that
 maintains the code and owns the repository.
 
-Playdex meets all of that: MIT throughout, nothing proprietary, released, and
-described on its own page. Apply at <https://signpath.org/apply.html>. It is a
-human review, so expect it to take a little while rather than minutes. Once a
-project is accepted, signing becomes a step in `release.yml` that submits the
-built installers and gets signed ones back.
+Arcadex meets all of that, but SignPath also looks for a project people
+already use, and turns down new ones until they have an audience. So this
+waits until Arcadex has one. Once a project is accepted, signing becomes a
+step in `release.yml` that submits the built installers and gets signed ones
+back.
 
 The alternatives, for completeness:
 
@@ -616,20 +638,42 @@ does — but it turns "this is really our build" from something you have to take
 on trust into something anyone can check:
 
 ```bash
-gh attestation verify Playdex_x.y.z_x64_en-US.msi --repo Woblu/Playdex
+gh attestation verify Arcadex_x.y.z_x64_en-US.msi --repo Woblu/Arcadex
 ```
 
 To check a download is the real thing rather than trusting this page, compare
 it against the release:
 
 ```powershell
-Get-FileHash .\Playdex_x.y.z_x64_en-US.msi -Algorithm SHA256
+Get-FileHash .\Arcadex_x.y.z_x64_en-US.msi -Algorithm SHA256
 ```
 
 Every installer is built in public by GitHub Actions from the commit the tag
 points at — the run, its logs and the resulting file are all on the releases
 page — so the hash you compute should match the file you downloaded from there
 byte for byte.
+
+## macOS says Arcadex is damaged
+
+The Mac build is signed ad hoc, not by a registered Apple developer, and is
+not notarised. That takes a paid Apple Developer account, which this project
+does not have yet. A downloaded app in that state is refused the first time
+with a message that it "is damaged and can't be opened". It is not damaged;
+macOS is saying it cannot tell who made it.
+
+After dragging Arcadex into Applications, either:
+
+- open **System Settings → Privacy & Security**, scroll to the message about
+  Arcadex and choose **Open Anyway**, or
+- run this once in Terminal, which removes the download flag macOS put on it:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Arcadex.app
+  ```
+
+This is only needed for the first install. Updates are downloaded by Arcadex
+itself rather than a browser, are checked against its own update key, and do
+not carry the flag.
 
 ## Setup
 
@@ -674,7 +718,7 @@ an earlier version moves them over on its next start.
 
 On macOS, an unsigned build is a new program as far as the Keychain is
 concerned each time it updates, so the first fetch after an update may ask
-whether Playdex can use the saved password. **Always Allow** answers it until
+whether Arcadex can use the saved password. **Always Allow** answers it until
 the next one.
 
 **ScreenScraper** (`screenscraper.fr`) needs two logins, which people often
@@ -763,7 +807,7 @@ Anything else gets `"emulator" "{rom}"`. Either way the command can be edited
 after, and is saved when you leave the field rather than on every key. `{rom}` is filled in after the command is split into arguments, so a
 path with spaces is one argument whether or not the template quotes it.
 
-Playdex does not download or link to emulators, firmware or keys. RPCS3 needs
+Arcadex does not download or link to emulators, firmware or keys. RPCS3 needs
 the PlayStation 3 system software installed, xemu needs files dumped from an
 Xbox, and the Switch emulators need keys and firmware from your own console;
 each emulator's own setup guide covers that.
@@ -796,7 +840,7 @@ that's a 404 and every check fails silently.
 `~/.playdex/updater.key`, in a folder that ignores itself so a stray
 `git add -A` can't pick it up.
 
-- **Anyone holding the private key can sign an update Playdex will trust and
+- **Anyone holding the private key can sign an update Arcadex will trust and
   install.** Keep it in a password manager and in GitHub repository secrets,
   nowhere else.
 - **Losing it can't be undone.** Installed copies only accept updates signed by
@@ -890,9 +934,9 @@ you.
 - The library lives in the app data directory next to the artwork cache, so
   deleting that folder resets everything without touching your ROMs.
 
-## What Playdex will not do
+## What Arcadex will not do
 
-Playdex manages games you already have. It does not search for, download,
+Arcadex manages games you already have. It does not search for, download,
 host or link to games, BIOS files, firmware, decryption keys or the tools
 that dump them, and it never will.
 
@@ -901,7 +945,7 @@ that dump them, and it never will.
   or say where to get them.
 - **Firmware and keys are yours to provide.** Several emulators need system
   software or keys dumped from a console you own. Each emulator's own setup
-  guide covers that; Playdex does not.
+  guide covers that; Arcadex does not.
 - **Artwork and descriptions belong to their owners.** They are fetched at
   run time from ScreenScraper, TheGamesDB and libretro-thumbnails, for games
   already in your library, and kept on your machine.
@@ -916,6 +960,6 @@ See [SECURITY.md](SECURITY.md) to report a security problem, and
 
 MIT. See [LICENSE](LICENSE).
 
-Playdex bundles no games, no BIOS files and no DAT catalogues. Artwork and
+Arcadex bundles no games, no BIOS files and no DAT catalogues. Artwork and
 descriptions are fetched at runtime from third-party metadata providers and
 belong to their respective owners.

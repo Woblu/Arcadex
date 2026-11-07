@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn imports_a_folder_and_matches_by_crc() {
         let tmp = std::env::temp_dir().join(format!(
-            "playdex-import-{}-{:?}",
+            "arcadex-import-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

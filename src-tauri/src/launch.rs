@@ -287,7 +287,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 /// Unpack a whole archive into `dir`, once.
 ///
 /// It goes into a `.partial` folder that is renamed only when every file is
-/// out, so an unpack cut short - Playdex closed, the disk full - never leaves
+/// out, so an unpack cut short - Arcadex closed, the disk full - never leaves
 /// half a game that the next launch takes for a whole one.
 fn unpack_whole(archive: &Path, dir: &Path, progress: Progress) -> Result<()> {
     if dir.join(COMPLETE).is_file() {
@@ -339,7 +339,7 @@ pub struct Unpacked {
 /// cache also takes it out of reach of eviction, which would otherwise be
 /// free to delete the only remaining copy of the game.
 ///
-/// This deletes something of yours, which nothing else in Playdex does. It
+/// This deletes something of yours, which nothing else in Arcadex does. It
 /// only ever happens when asked for directly.
 pub fn unpack_in_place(game: &Game, cache_root: &Path, progress: Progress) -> Result<Unpacked> {
     let archive = PathBuf::from(&game.path);
@@ -458,7 +458,9 @@ fn unpack_folder_in_place(
         None => root.to_path_buf(),
     };
     let moved = cached.join(COMPLETE).is_file() && std::fs::rename(pick(&cached), &folder).is_ok();
-    let work = parent.join(format!(".playdex-unpacking-{}", game.id));
+    let work = parent.join(format!(".arcadex-unpacking-{}", game.id));
+    // An unpack cut short before the rename left its half under the old name.
+    let _ = std::fs::remove_dir_all(parent.join(format!(".playdex-unpacking-{}", game.id)));
     if !moved {
         let _ = std::fs::remove_dir_all(&work);
         crate::hashing::extract_all(archive, &work, progress)?;
@@ -831,7 +833,7 @@ mod tests {
 
     fn tmp(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-launch-{}-{}-{:?}",
+            "arcadex-launch-{}-{}-{:?}",
             tag,
             std::process::id(),
             std::time::SystemTime::now()
@@ -1124,7 +1126,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Half an unpack, left by Playdex closing partway, is not taken for a
+    /// Half an unpack, left by Arcadex closing partway, is not taken for a
     /// whole one.
     #[test]
     fn an_unpack_cut_short_is_done_again() {
@@ -1154,7 +1156,7 @@ mod tests {
         assert!(!dir.join("Skate 3.zip").exists(), "the zip goes last, once all is in place");
         assert_eq!(done.filename, "Skate 3", "named from the package's header");
         assert_eq!(done.size, 0xB000 + 3000);
-        assert!(!dir.join(format!(".playdex-unpacking-{}", game.id)).exists());
+        assert!(!dir.join(format!(".arcadex-unpacking-{}", game.id)).exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

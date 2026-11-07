@@ -172,7 +172,7 @@ pub async fn choose_custom_cover(app: AppHandle, id: i64) -> Result<Option<Strin
         .unwrap_or_default();
     if !COVER_EXTENSIONS.contains(&ext.as_str()) {
         return Err(AppError::Other(format!(
-            "{ext} is not an image Playdex can show. Use a PNG, JPEG, WebP, GIF, BMP or AVIF."
+            "{ext} is not an image Arcadex can show. Use a PNG, JPEG, WebP, GIF, BMP or AVIF."
         )));
     }
 
@@ -1447,7 +1447,7 @@ pub async fn download_hack_bundle(app: AppHandle, bundle: HackBundle) -> Result<
     // slower than about thirty megabytes a second. This one only gives up
     // when the connection goes quiet.
     let client = reqwest::Client::builder()
-        .user_agent(concat!("playdex/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("arcadex/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(60))
         .build()
@@ -1642,7 +1642,7 @@ mod tests {
     /// clear of.
     #[test]
     fn a_new_hack_never_takes_another_hacks_file() {
-        let dir = std::env::temp_dir().join(format!("playdex-hackname-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("arcadex-hackname-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

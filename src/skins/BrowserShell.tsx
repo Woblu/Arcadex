@@ -95,7 +95,7 @@ export default function BrowserShell(props: ShellProps) {
       </div>
 
       <header className="br-top">
-        <span className="br-brand">Playdex</span>
+        <span className="br-brand">Arcadex</span>
         <div className="br-filters">
           <button
             className={`br-filter ${platform === null && !favoritesOnly ? "on" : ""}`}

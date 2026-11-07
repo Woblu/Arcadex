@@ -487,7 +487,7 @@ pub fn extract_all(path: &Path, dest: &Path, progress: &mut dyn FnMut(u64, u64))
         }
         _ => {
             return Err(crate::error::AppError::Other(format!(
-                "{} is not an archive Playdex can unpack",
+                "{} is not an archive Arcadex can unpack",
                 path.display()
             )))
         }
@@ -523,7 +523,7 @@ mod archive_tests {
     #[test]
     fn refuses_an_archive_that_would_write_outside_its_folder() {
         use std::io::Write;
-        let dir = std::env::temp_dir().join(format!("playdex-slip-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("arcadex-slip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let zip = dir.join("evil.zip");
@@ -554,7 +554,7 @@ mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-hash-{}-{}-{:?}",
+            "arcadex-hash-{}-{}-{:?}",
             tag,
             std::process::id(),
             std::time::SystemTime::now()

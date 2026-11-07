@@ -504,7 +504,7 @@ fn insert_console_record(
 }
 
 /// Library entries that a scan made from inside a console game's folder
-/// before Playdex knew the folder was one game: its data files, each listed
+/// before Arcadex knew the folder was one game: its data files, each listed
 /// as a game of its own. The boot file is kept, since that is the game, and
 /// so is anything you have played or favourited, as everywhere else.
 fn stale_console_files(
@@ -724,7 +724,7 @@ pub fn scan_all(
     let app_data = app.try_state::<crate::AppState>().map(|s| s.media_root.clone());
     candidates.extend(dropped_files(&known, &folders, app_data.as_deref()));
 
-    // A scan from before Playdex knew a console's folder layout listed the
+    // A scan from before Arcadex knew a console's folder layout listed the
     // folder's data files one by one. They are part of one game, now found.
     let stale = stale_console_files(&known, &console_games);
     if !stale.is_empty() {
@@ -884,7 +884,7 @@ pub fn scan_all(
 }
 
 /// Library entries outside every library folder that are still there:
-/// files that were dropped onto the window. Playdex's own files - patched
+/// files that were dropped onto the window. Arcadex's own files - patched
 /// hacks, disc playlists - live in the app data folder and are left out.
 fn dropped_files(
     known: &std::collections::HashMap<String, db::IndexState>,
@@ -1029,7 +1029,7 @@ mod tests {
     #[test]
     fn drops_index_files_and_adopt_folders() {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-drop-{}-{:?}",
+            "arcadex-drop-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1094,7 +1094,7 @@ mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-{}-{}-{:?}",
+            "arcadex-{}-{}-{:?}",
             tag,
             std::process::id(),
             std::time::SystemTime::now()
@@ -1290,7 +1290,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// What a scan from before Playdex knew the PlayStation 3 left behind:
+    /// What a scan from before Arcadex knew the PlayStation 3 left behind:
     /// the EBOOT as an unidentified game called "EBOOT", and every data file
     /// beside it as another. The data files go, unless you have played one,
     /// and the EBOOT is put right.
@@ -1394,7 +1394,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The case this was written for: a zipped package added before Playdex
+    /// The case this was written for: a zipped package added before Arcadex
     /// could read one, sitting in the library as Unidentified.
     #[test]
     fn puts_right_a_zipped_package_an_older_scan_left_unidentified() {
@@ -1426,7 +1426,7 @@ mod tests {
     }
 
     /// A file dropped onto the window, outside every library folder, is
-    /// looked at again by a scan. Playdex's own files are not.
+    /// looked at again by a scan. Arcadex's own files are not.
     #[test]
     fn a_scan_looks_again_at_files_dropped_on_the_window() {
         let root = scratch("dropped");
@@ -1525,7 +1525,7 @@ mod tests {
     #[test]
     fn bytes_beat_the_folder_and_the_filename() {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-sig-{}-{:?}",
+            "arcadex-sig-{}-{:?}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

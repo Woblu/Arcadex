@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Playdex",
+  "productName": "Arcadex",
   "version": "0.15.0",
-  "identifier": "com.boazv.playdex",
+  "identifier": "com.boazv.arcadex",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Playdex",
+        "title": "Arcadex",
         "width": 1360,
         "height": 860,
         "minWidth": 900,
@@ -56,12 +56,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-"
+    }
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQyOTU2MjE0MTAzNjUxMwpSV1FUWlFOQklWWXBCTWNnbG1EeVgxTGVHZStyU3hNYy9EODAzVVpmSWpjdmdjQVM1MGdDQUZMVwo=",
       "endpoints": [
+        "https://github.com/Woblu/Arcadex/releases/latest/download/latest.json",
         "https://github.com/Woblu/Playdex/releases/latest/download/latest.json"
       ],
       "windows": {

@@ -8,7 +8,7 @@ nothing serves them.
 | PNG you drop in | What the site loads | Width | Where it goes |
 | --- | --- | --- | --- |
 | `library.png` | `library.webp` | 2048 | The big one under the hero |
-| `skin-playdex.png` | `skin-playdex.webp` | 1600 | Layouts, first card |
+| `skin-arcadex.png` | `skin-arcadex.webp` | 1600 | Layouts, first card |
 | `skin-console.png` | `skin-console.webp` | 1600 | Layouts, second card |
 | `skin-bigpicture.png` | `skin-bigpicture.webp` | 1600 | Layouts, third card |
 | `skin-arc.png` | `skin-arc.webp` | 1600 | Layouts, fourth card |
@@ -26,7 +26,7 @@ From `docs/`, with Pillow installed:
 ```python
 from PIL import Image
 for src, w in [('shots/library.png', 2048),
-               ('shots/skin-playdex.png', 1600),
+               ('shots/skin-arcadex.png', 1600),
                ('shots/skin-console.png', 1600),
                ('shots/skin-bigpicture.png', 1600),
                ('shots/skin-arc.png', 1600),

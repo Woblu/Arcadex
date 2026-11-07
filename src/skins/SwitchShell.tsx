@@ -122,12 +122,12 @@ export default function SwitchShell(props: ShellProps) {
       <div className="sw-vignette" aria-hidden="true" />
 
       <header className="sw-top">
-        {/* Where a console puts your profile picture. Playdex has no accounts,
+        {/* Where a console puts your profile picture. Arcadex has no accounts,
             so it carries the app's own mark rather than an initial taken from
             whichever game happens to sort first. */}
         <div className="sw-profile">
           <Logo size={26} />
-          <span className="sw-wordmark">Playdex</span>
+          <span className="sw-wordmark">Arcadex</span>
         </div>
 
         <div className="sw-top-right">

@@ -670,7 +670,7 @@ pub(crate) mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-consoles-{}-{}-{:?}",
+            "arcadex-consoles-{}-{}-{:?}",
             tag,
             std::process::id(),
             std::time::SystemTime::now()

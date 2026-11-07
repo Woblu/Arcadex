@@ -39,7 +39,7 @@ pub struct AppState {
 /// webview, or `None` for anything else.
 ///
 /// Two things qualify, and both must be images. Artwork in the `media`
-/// folder, which is everything Playdex downloaded or was given. And the
+/// folder, which is everything Arcadex downloaded or was given. And the
 /// thumbnail RetroArch writes beside a save state, `<rom>.state1.png` next to
 /// `<rom>.state1`, which lives in RetroArch's own folders.
 ///
@@ -127,12 +127,14 @@ fn app_paths(state: State<AppState>) -> serde_json::Value {
 /// the artwork cache, imported patches and the generated disc playlists —
 /// lives in that folder. A launch after a rename has to go and find it.
 ///
-/// `com.boazv.playdex` is the current one again, so it does not appear here:
-/// 0.9.0 renamed the app to Romcade and 0.11.0 renamed it back, which means a
-/// library can be sitting under either name depending on which versions a
-/// person happened to run. Add to this list on the next rename rather than
-/// replacing it, because the old directories do not disappear.
-const LEGACY_IDENTIFIERS: &[&str] = &["com.boazv.romcade"];
+/// The app was Playdex, became Romcade in 0.9.0, went back to Playdex in
+/// 0.11.0 and became Arcadex in 0.16.0, so a library can be sitting under
+/// either old name depending on which versions a person happened to run.
+/// Newest first matters: someone who ran every version has a stale Romcade
+/// library as well as their real Playdex one, and the first library found is
+/// the one adopted. Add to the front of this list on the next rename rather
+/// than replacing it, because the old directories do not disappear.
+const LEGACY_IDENTIFIERS: &[&str] = &["com.boazv.playdex", "com.boazv.romcade"];
 
 /// Whether a directory actually holds a library, as opposed to merely
 /// existing.
@@ -250,6 +252,16 @@ pub fn run() {
                 Ok(n) => eprintln!("moved {n} saved passwords to the credential store"),
                 Err(e) => eprintln!("could not move saved passwords: {e}"),
             }
+            // And the ones already in the store, filed under an old name.
+            if let Some(parent) = data_dir.parent() {
+                for legacy in LEGACY_IDENTIFIERS {
+                    let retire = !has_library(&parent.join(legacy));
+                    let n = secrets::adopt(&secrets::Keychain::new(legacy), &vault, retire);
+                    if n > 0 {
+                        eprintln!("carried {n} saved passwords over from {legacy}");
+                    }
+                }
+            }
 
             app.manage(db::Db(std::sync::Arc::new(Mutex::new(conn))));
 
@@ -257,7 +269,7 @@ pub fn run() {
             std::fs::create_dir_all(media_root.join("media"))?;
 
             let client = reqwest::Client::builder()
-                .user_agent(concat!("playdex/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("arcadex/", env!("CARGO_PKG_VERSION")))
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("could not build http client");
@@ -355,7 +367,7 @@ mod media_tests {
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-media-{}-{}",
+            "arcadex-media-{}-{}",
             name,
             std::process::id()
         ));
@@ -423,11 +435,11 @@ mod media_tests {
 
 #[cfg(test)]
 mod migration_tests {
-    use super::adopt_data_dir;
+    use super::{adopt_data_dir, migrate_legacy_data_dir};
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-migrate-{}-{}",
+            "arcadex-migrate-{}-{}",
             name,
             std::process::id()
         ));
@@ -446,7 +458,7 @@ mod migration_tests {
     fn carries_a_library_across() {
         let base = scratch("move");
         let old = base.join("com.boazv.romcade");
-        let new = base.join("com.boazv.playdex");
+        let new = base.join("com.boazv.arcadex");
         library_at(&old, b"library");
 
         assert!(adopt_data_dir(&old, &new).unwrap());
@@ -463,7 +475,7 @@ mod migration_tests {
     fn adopts_into_a_destination_that_exists_but_is_empty() {
         let base = scratch("empty-dest");
         let old = base.join("com.boazv.romcade");
-        let new = base.join("com.boazv.playdex");
+        let new = base.join("com.boazv.arcadex");
         library_at(&old, b"library");
         std::fs::create_dir_all(&new).unwrap();
 
@@ -477,7 +489,7 @@ mod migration_tests {
     fn refuses_to_overwrite_a_real_library() {
         let base = scratch("keep");
         let old = base.join("com.boazv.romcade");
-        let new = base.join("com.boazv.playdex");
+        let new = base.join("com.boazv.arcadex");
         library_at(&old, b"old");
         library_at(&new, b"new");
 
@@ -488,10 +500,31 @@ mod migration_tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
+    /// Someone who ran every version has a stale library under Romcade as
+    /// well as their real one under Playdex. The newer one is the one that
+    /// comes across, and the stale one is left where it is.
+    #[test]
+    fn the_most_recent_name_wins_when_both_hold_a_library() {
+        let base = scratch("newest");
+        let romcade = base.join("com.boazv.romcade");
+        let playdex = base.join("com.boazv.playdex");
+        let arcadex = base.join("com.boazv.arcadex");
+        library_at(&romcade, b"stale");
+        library_at(&playdex, b"real");
+
+        migrate_legacy_data_dir(&arcadex);
+
+        assert_eq!(std::fs::read(arcadex.join("library.db")).unwrap(), b"real");
+        assert!(!playdex.join("library.db").exists());
+        assert_eq!(std::fs::read(romcade.join("library.db")).unwrap(), b"stale");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
     #[test]
     fn does_nothing_on_a_fresh_install() {
         let base = scratch("fresh");
-        let new = base.join("com.boazv.playdex");
+        let new = base.join("com.boazv.arcadex");
         assert!(!adopt_data_dir(&base.join("com.boazv.romcade"), &new).unwrap());
         assert!(!new.exists());
     }
@@ -502,7 +535,7 @@ mod migration_tests {
     fn ignores_an_empty_legacy_directory() {
         let base = scratch("empty-src");
         let old = base.join("com.boazv.romcade");
-        let new = base.join("com.boazv.playdex");
+        let new = base.join("com.boazv.arcadex");
         std::fs::create_dir_all(&old).unwrap();
 
         assert!(!adopt_data_dir(&old, &new).unwrap());

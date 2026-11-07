@@ -25,7 +25,7 @@ export default function FileSection({ game, onChanged }: Props) {
   // Windows paths use backslashes, so both separators have to split.
   const fileName = game.path.split(/[\\/]/).pop() ?? game.path;
   // Only archives have a second copy to collapse. `.rar` is excluded because
-  // Playdex cannot open one in the first place.
+  // Arcadex cannot open one in the first place.
   const isArchived = /\.(zip|7z)$/i.test(game.path);
   // A console game kept as a folder is listed under the folder's name and
   // launched from the file inside it, so the two names differ. One zipped up

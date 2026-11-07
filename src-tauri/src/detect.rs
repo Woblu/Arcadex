@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn counts_only_core_libraries() {
-        let dir = std::env::temp_dir().join(format!("playdex-cores-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("arcadex-cores-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("snes9x_libretro.{}", core_extension())), b"x").unwrap();
         std::fs::write(dir.join("readme.txt"), b"x").unwrap();

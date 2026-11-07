@@ -12,7 +12,7 @@ use crate::models::Game;
 use crate::platforms;
 
 const BASE: &str = "https://api.screenscraper.fr/api2/jeuInfos.php";
-const SOFTNAME: &str = "playdex";
+const SOFTNAME: &str = "arcadex";
 
 /// Region codes in the order we would like artwork and titles.
 fn region_order(pref: &str) -> Vec<String> {

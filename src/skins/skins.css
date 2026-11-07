@@ -108,7 +108,7 @@ body.skin-switch {
 
 /* No circle. A pixel-art mark shrunk inside a grey bubble reads as a sticker
    stuck on the screen, and there is no profile here for a bubble to stand for
-   anyway - Playdex has no accounts. */
+   anyway - Arcadex has no accounts. */
 .sw-profile {
   display: flex;
   align-items: center;
@@ -838,7 +838,7 @@ body.skin-steam {
 }
 
 /* The offer to collapse an archived game down to one copy. Set apart from
-   the plain file path above it, since it is the one control in Playdex that
+   the plain file path above it, since it is the one control in Arcadex that
    deletes something of yours. */
 .unpack-box {
   margin-top: 10px;

@@ -11,7 +11,7 @@
 //! recognised by their names, a playlist is written, and the set shows up as
 //! the one game it always was.
 //!
-//! The playlists are written into Playdex's own folder rather than beside the
+//! The playlists are written into Arcadex's own folder rather than beside the
 //! ROMs. Nothing here writes to, moves or deletes anything in a library
 //! folder; the discs themselves are only hidden, and "Show hidden" brings
 //! them straight back.
@@ -299,7 +299,7 @@ mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "playdex-discs-{}-{}-{:?}",
+            "arcadex-discs-{}-{}-{:?}",
             tag,
             std::process::id(),
             std::time::SystemTime::now()

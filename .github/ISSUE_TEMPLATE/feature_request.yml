@@ -1,13 +1,13 @@
 name: An idea
-description: Something Playdex should do, or do differently.
+description: Something Arcadex should do, or do differently.
 labels: [idea]
 body:
   - type: markdown
     attributes:
       value: |
-        Check the [roadmap](https://github.com/Woblu/Playdex/blob/master/ROADMAP.md) first; it may already be planned.
+        Check the [roadmap](https://github.com/Woblu/Arcadex/blob/master/ROADMAP.md) first; it may already be planned.
 
-        Playdex works with games you already have. It will not search for, download or link to games, BIOS files, firmware or keys, so ideas that need it to are out of scope.
+        Arcadex works with games you already have. It will not search for, download or link to games, BIOS files, firmware or keys, so ideas that need it to are out of scope.
   - type: textarea
     id: problem
     attributes:

@@ -50,7 +50,7 @@ export default function FoldersTab({ onError, onMessage, onScanRequest }: Props)
   return (
     <>
       <div className="notice">
-        Playdex indexes ROMs already on your disk. Point it at the folders you
+        Arcadex indexes ROMs already on your disk. Point it at the folders you
         keep them in. If a folder holds one system, set it below — that
         resolves formats like <code>.bin</code>, <code>.iso</code> and{" "}
         <code>.zip</code> that several consoles share.

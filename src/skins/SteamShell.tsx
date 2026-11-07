@@ -59,7 +59,7 @@ export default function SteamShell(props: ShellProps) {
   return (
     <div className="steam-shell">
       <aside className="st-rail">
-        <div className="st-brand">Playdex</div>
+        <div className="st-brand">Arcadex</div>
 
         <button
           className={`st-rail-btn ${platform === null && !favoritesOnly ? "on" : ""}`}

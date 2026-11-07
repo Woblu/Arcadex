@@ -4,7 +4,7 @@
 #
 #   npm version 0.2.0 --no-git-tag-version   # keeps package.json in step
 #   # bump `version` in src-tauri/tauri.conf.json to match
-#   git commit -am "Playdex 0.2.0"
+#   git commit -am "Arcadex 0.2.0"
 #   git tag v0.2.0 && git push && git push --tags
 #
 # The tag is what starts this; nothing publishes on an ordinary push. Each
@@ -27,7 +27,7 @@
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  empty, unless you set one
 #
 # The private key never leaves your machine and this file: it is not in the
-# repository, and anyone holding it can sign an update Playdex will trust.
+# repository, and anyone holding it can sign an update Arcadex will trust.
 
 name: Release
 
@@ -66,7 +66,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: tag,
-              name: `Playdex ${tag}`,
+              name: `Arcadex ${tag}`,
               body: commit.commit.message,
               draft: true,
               prerelease: false,
@@ -158,7 +158,7 @@ jobs:
 
       # Provenance: a signed statement that these exact files came out of this
       # repository, at this commit, from this workflow. Anyone can check it
-      # with `gh attestation verify <file> --repo Woblu/Playdex`.
+      # with `gh attestation verify <file> --repo Woblu/Arcadex`.
       #
       # This is not Authenticode and it will not stop Windows deleting an
       # unsigned installer — only a code signing certificate does that. What it

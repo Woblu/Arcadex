@@ -74,7 +74,7 @@ export async function checkForUpdate(manual = false): Promise<UpdateInfo | null>
 /**
  * Set by the app while a game is running or being got ready.
  *
- * Installing restarts Playdex, and the restart takes with it the wait on the
+ * Installing restarts Arcadex, and the restart takes with it the wait on the
  * emulator that records the session when it closes - so updating mid-game
  * lost that session's play time. Both places that can install an update come
  * through here.

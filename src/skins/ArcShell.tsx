@@ -72,7 +72,7 @@ export default function ArcShell(props: ShellProps) {
       )}
 
       <header className="arc-top">
-        <div className="arc-brand">Playdex</div>
+        <div className="arc-brand">Arcadex</div>
 
         <div className="arc-systems">
           <button

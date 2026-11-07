@@ -273,7 +273,7 @@ export default function WiiShell(props: ShellProps) {
             data-nav
             title="Settings"
           >
-            <span>Playdex</span>
+            <span>Arcadex</span>
           </button>
           <button className="wii-slot" onClick={onScan} data-nav>
             Scan

@@ -22,7 +22,7 @@ export type SkinName =
 export const SKINS: Array<{ value: SkinName; label: string; blurb: string }> = [
   {
     value: "launchbox",
-    label: "Playdex",
+    label: "Arcadex",
     blurb: "A dense desktop library: sidebar, sortable grid, detail panel.",
   },
   {

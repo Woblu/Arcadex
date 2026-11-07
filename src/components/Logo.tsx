@@ -1,7 +1,7 @@
 import logoUrl from "../assets/logo.svg";
 
 /**
- * The Playdex mark: original 8-bit pixel art — a play triangle with a sprite
+ * The Arcadex mark: original 8-bit pixel art — a play triangle with a sprite
  * outline over a brick ground, in the NES sky blue.
  *
  * Rendered from the same SVG that generates every app icon size, so the
@@ -19,7 +19,7 @@ export default function Logo({ size = 22, className }: Props) {
       src={logoUrl}
       width={size}
       height={size}
-      alt="Playdex"
+      alt="Arcadex"
       className={className}
       style={{ imageRendering: "pixelated" }}
     />

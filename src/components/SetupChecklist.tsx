@@ -17,7 +17,7 @@ export function listOf(names: string[]): string {
 }
 
 /**
- * The three things between installing Playdex and playing something.
+ * The three things between installing Arcadex and playing something.
  *
  * The first run used to ask for a ROM folder and nothing else. Most people
  * added one, scanned, pressed Play, and were told RetroArch was not set: the
@@ -36,7 +36,7 @@ export default function SetupChecklist({ status, onAddFolder, onOpenSettings, on
       title: "Add your games",
       detail: hasGames
         ? `${status.games} game${status.games === 1 ? "" : "s"} in your library.`
-        : "Point Playdex at the folders you keep ROMs in. It reads them where they are.",
+        : "Point Arcadex at the folders you keep ROMs in. It reads them where they are.",
       action: hasGames ? null : { label: "Add a folder", run: onAddFolder },
     },
     {

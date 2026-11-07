@@ -1,4 +1,4 @@
-//! Standalone emulators Playdex knows the command line of.
+//! Standalone emulators Arcadex knows the command line of.
 //!
 //! Browsing to an emulator in Settings fills in a command for you. For most
 //! that is `"emulator" "{rom}"`, but several want something more, and the
@@ -449,7 +449,7 @@ mod tests {
     /// A folder of emulators sorted by system, the way people keep them.
     #[test]
     fn finds_emulators_unzipped_into_a_folder() {
-        let root = std::env::temp_dir().join(format!("playdex-emus-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("arcadex-emus-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let exe = if cfg!(target_os = "windows") { ".exe" } else { "" };
         let put = |rel: &str| {

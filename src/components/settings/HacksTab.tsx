@@ -80,7 +80,7 @@ export default function HacksTab({ onError }: TabProps) {
   return (
     <>
       <div className="notice">
-        Import ROM hack patches in bulk and Playdex indexes them by the checksum
+        Import ROM hack patches in bulk and Arcadex indexes them by the checksum
         of the ROM each one was built for. A game's detail panel then shows
         exactly which hacks your dump can run — no guessing about revisions or
         regions.

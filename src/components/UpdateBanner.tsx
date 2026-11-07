@@ -1,5 +1,5 @@
 /**
- * The notice that a newer Playdex exists.
+ * The notice that a newer Arcadex exists.
  *
  * Deliberately a corner card rather than a modal: an update is news, not an
  * errand, and it should never stand between someone and the game they opened
@@ -46,7 +46,7 @@ export default function UpdateBanner({ info, onDismiss }: Props) {
     <div className="update-card">
       <div className="update-head">
         <span className="update-dot" aria-hidden="true" />
-        <strong>Playdex {info.version} is available</strong>
+        <strong>Arcadex {info.version} is available</strong>
         {!busy && (
           <button className="update-x" onClick={onDismiss} title="Not now">
             ×
@@ -72,7 +72,7 @@ export default function UpdateBanner({ info, onDismiss }: Props) {
           </div>
           <div className="update-sub">
             {state.phase === "installing"
-              ? "Installing — Playdex will restart"
+              ? "Installing — Arcadex will restart"
               : state.total
                 ? `${formatBytes(state.received)} of ${formatBytes(state.total)}`
                 : `${formatBytes(state.received)} downloaded`}
