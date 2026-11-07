@@ -515,6 +515,11 @@ body.skin-steam {
   overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  /* Rows as tall as the capsules. Left to size themselves, they came out at
+     the capsules' clipped minimum - 163px for a 255px capsule at the
+     default window size - and every row after the first was drawn over
+     the one above it. */
+  grid-auto-rows: max-content;
   gap: 16px;
   /* A scroller clips both axes, so the room a focused tile needs for its
      ring, its lift and its shadow has to be padding inside it. Without

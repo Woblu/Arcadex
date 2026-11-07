@@ -1,6 +1,6 @@
 [package]
 name = "arcadex"
-version = "0.15.0"
+version = "0.16.0"
 description = "A ROM library manager and emulator launcher."
 authors = ["Woblu"]
 edition = "2021"

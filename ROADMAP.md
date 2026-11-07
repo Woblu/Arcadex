@@ -7,46 +7,45 @@ what is done but not yet released.
 ## Before the next release
 
 What stands between the work already done and putting it in front of
-people. None of it is code, which is why it is listed first.
+people.
 
-- [ ] **A new name.** Another "PlayDex" game-library app launched in
-      February 2026. The name sets the app identifier, the data folder,
-      the site and every package id, so it comes before anything is
-      published. A rename keeps libraries: the move from Romcade back to
-      Playdex already carries one across.
-- [ ] **Sign the Windows installers.** The fix for Defender deleting them,
-      and winget will not accept a package Defender flags. SignPath
-      Foundation signs open source projects for free, but it takes an
-      application from the maintainer; after that it is a step in
-      `release.yml`. See the README.
-- [ ] **Notarise the macOS build.** Gatekeeper, and Homebrew's own cask
-      list, both want it. It needs an Apple Developer account.
-- [ ] **Look twice at the Console and Channels layouts.** They are drawn
-      after well-known home screens. Nintendo's 2026 takedowns went after
-      look-alike interfaces as well as emulators.
 - [ ] **Run it against a real library.** Thousands of files, not the
-      handful used while building this.
+      handful used while building this. The first run of 0.16 moves a
+      Playdex library into Arcadex's folder, so back up `library.db` first.
+- [ ] **Try the Flatpak on a Steam Deck.** Built by the release workflow and
+      never yet run on one: Game Mode, a controller in WebKitGTK, RetroArch
+      from Discover, and a ROM on the SD card.
+
+## Waiting on someone else
+
+- **Sign the Windows installers.** SignPath Foundation signs open source
+  projects for free, but turns down new ones until they have users. Apply
+  once Arcadex has some. Until then the `.msi`, Microsoft's false-positive
+  form, and the provenance attestation are the answer. See the README.
+- **Notarise the macOS build.** It needs a paid Apple Developer account.
+  Builds are signed ad hoc meanwhile, and the README says how to open one.
+- **Flathub.** Flathub builds from source, so this needs a manifest that
+  builds Arcadex itself, with its Rust and npm dependencies vendored by
+  `flatpak-cargo-generator` and `flatpak-node-generator`, rather than the
+  one in `packaging/flatpak` that repackages the release's `.deb`.
 
 ## Now
 
-Where Playdex is behind Retrom, the nearest open-source alternative, and
-the things its users keep asking for that it has not built. Playdex is
+Where Arcadex is behind Retrom, the nearest open-source alternative, and
+the things its users keep asking for that it has not built. Arcadex is
 ahead on knowing what a file is - hashes, headers, disc filesystems, DATs -
-and on everything it does with a single machine's library.
+on saves and play time across machines without a server, and on everything
+it does with a single machine's library.
 
-- [ ] **Saves and play time across machines, without a server.** Copy a
-      game's saves into a folder the user already syncs - Syncthing,
-      OneDrive, a NAS - after it closes, and back before it starts, keeping
-      dated versions. Play time as a journal of sessions per machine in the
-      same folder, merged on start, rather than syncing the database.
-- [ ] **On the Steam Deck.** A Flathub build, opening straight into a
-      couch layout in Game Mode, and launching Flatpak emulators through
-      `flatpak-spawn --host`.
+- [ ] **Add to Steam.** Non-Steam shortcuts with grid art, for playing
+      from Steam's own interface on a Deck.
 - [ ] **Show the artwork we already have.** The scraper fetches title
       screens and in-game shots, and only the hero image shows one.
 - [ ] **Collections and saved filters.** Hand-picked lists that cut across
       systems - "beat these", "co-op", "for the kids" - and filters kept
       around, with region and language read from the dump's own name.
+- [ ] **Sync for standalone emulators' saves.** Each keeps them its own
+      way - memory cards, per-game folders, a NAND - so each needs teaching.
 
 ## Next
 
@@ -56,8 +55,6 @@ and on everything it does with a single machine's library.
 - [ ] **RetroAchievements.** Log in, show what a game has and what you
       have got, and switch RetroArch's achievements on at launch the way
       cheats are written now.
-- [ ] **Add to Steam.** Non-Steam shortcuts with grid art, for playing
-      from Steam's own interface on a Deck.
 - [ ] **Per-game emulator arguments.** The override takes a whole command;
       sometimes all you want is one extra flag on the system's.
 - [ ] **Read a `.cue` sheet's own track list** rather than only the files
@@ -71,20 +68,32 @@ and on everything it does with a single machine's library.
 
 ## Done
 
+- [x] Arcadex: the new name, with libraries and saved passwords carried
+      across from Playdex [0.16.0]
+- [x] Saves and play time across machines, through a folder you already
+      sync [0.16.0]
+- [x] On the Steam Deck: a Flatpak, full screen in a couch layout from
+      Game Mode, and emulators started on the host [0.16.0]
+- [x] The keyboard as a pad: arrows move, Enter presses, Escape is Back,
+      F11 is full screen [0.16.0]
+- [x] macOS builds signed ad hoc, with instructions for Gatekeeper [0.16.0]
+- [x] The Lounge shelf's rows no longer drawn over each other [0.16.0]
+- [x] The site's screenshots and link preview retaken as Arcadex, all six
+      layouts [0.16.0]
 - [x] PlayStation 3, 4 and 5, Xbox, Xbox 360 and Wii U, with games kept
-      as folders recognised as one game each [next]
+      as folders recognised as one game each [0.16.0]
 - [x] Standalone emulators found on disk, and their arguments filled in
-      [next]
+      [0.16.0]
 - [x] Passwords in the system credential store, a content security
-      policy, and a media protocol that serves artwork only [next]
-- [x] Checksum a disc image on demand, past the 512 MB scan limit [next]
-- [x] Frontend tests, and CI running both test suites [next]
+      policy, and a media protocol that serves artwork only [0.16.0]
+- [x] Checksum a disc image on demand, past the 512 MB scan limit [0.16.0]
+- [x] Frontend tests, and CI running both test suites [0.16.0]
 - [x] Console games played straight from a zip, unpacked whole with
-      progress [next]
+      progress [0.16.0]
 - [x] A Getting started card that names the systems that cannot start yet
-      [next]
+      [0.16.0]
 - [x] Nothing lost by accident: cheats, saves, hacks, removal and clean-up
-      fixed after a review, and nothing left freezing the window [next]
+      fixed after a review, and nothing left freezing the window [0.16.0]
 
 - [x] Multi-disc games gathered into one entry, with an `.m3u` the emulator
       swaps discs from [0.8.0]
