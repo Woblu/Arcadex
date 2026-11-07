@@ -1,0 +1,76 @@
+# Arcadex as a Flatpak, for the Steam Deck and any other Linux desktop.
+#
+# Built from the .deb a release already makes, as Tauri's own Flatpak guide
+# does: the program is the same one the .deb installs, and this only puts it
+# in a sandbox with the permissions below. The release workflow builds it on
+# every tag and attaches Arcadex.flatpak to the release.
+#
+# By hand, from this folder, with the release's .deb copied in as
+# arcadex_amd64.deb:
+#
+#   flatpak install --user flathub org.gnome.Platform//48 org.gnome.Sdk//48
+#   flatpak-builder --user --install --force-clean build com.boazv.arcadex.yml
+#   flatpak run com.boazv.arcadex
+#
+# For Flathub the .deb source becomes the release URL and its sha256.
+
+id: com.boazv.arcadex
+# WebKitGTK, which Tauri draws with, comes with the GNOME runtime.
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+command: arcadex
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  # Controllers. Steam Input's virtual pad on a Deck is one of these.
+  - --device=all
+  # ROM folders, a sync folder, and RetroArch's own settings and saves.
+  - --filesystem=home
+  # SD cards and USB drives: a Steam Deck mounts its card under /run/media.
+  - --filesystem=/run/media
+  - --filesystem=/media
+  - --filesystem=/mnt
+  # The RetroArch Flatpak keeps its config, cores and saves here, which a
+  # home folder permission does not reach.
+  - --filesystem=~/.var/app/org.libretro.RetroArch
+  # Emulators are other Flatpaks, or programs on the host, outside this
+  # sandbox. Arcadex starts them with `flatpak-spawn --host`, which needs
+  # this. It is the permission that lets a launcher launch things.
+  - --talk-name=org.freedesktop.Flatpak
+  # Passwords in the system keyring, where there is one.
+  - --talk-name=org.freedesktop.secrets
+
+modules:
+  - name: arcadex
+    buildsystem: simple
+    sources:
+      - type: file
+        path: arcadex_amd64.deb
+        only-arches: [x86_64]
+      - type: file
+        path: com.boazv.arcadex.desktop
+      - type: file
+        path: com.boazv.arcadex.metainfo.xml
+    build-commands:
+      - ar -x arcadex_amd64.deb
+      - tar -xf data.tar.*
+      # The program, under the name the command above expects whatever the
+      # .deb called it.
+      - install -Dm755 -t /app/bin usr/bin/*
+      - test -e /app/bin/arcadex || ln -s "$(ls /app/bin | head -n1)" /app/bin/arcadex
+      # Icons, renamed to the app id so the desktop and Steam find them.
+      - |
+        for dir in usr/share/icons/hicolor/*/apps; do
+          size=$(basename "$(dirname "$dir")")
+          for icon in "$dir"/*.png; do
+            install -Dm644 "$icon" "/app/share/icons/hicolor/$size/apps/com.boazv.arcadex.png"
+          done
+        done
+      - install -Dm644 com.boazv.arcadex.desktop /app/share/applications/com.boazv.arcadex.desktop
+      - install -Dm644 com.boazv.arcadex.metainfo.xml /app/share/metainfo/com.boazv.arcadex.metainfo.xml

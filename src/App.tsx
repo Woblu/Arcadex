@@ -30,13 +30,7 @@ import SteamShell from "./skins/SteamShell";
 import ArcShell from "./skins/ArcShell";
 import BrowserShell from "./skins/BrowserShell";
 import WiiShell from "./skins/WiiShell";
-import {
-  DEFAULT_SKIN,
-  isSkin,
-  SKINS,
-  type ShellProps,
-  type SkinName,
-} from "./skins/shell";
+import { DEFAULT_SKIN, pickSkin, SKINS, type ShellProps, type SkinName } from "./skins/shell";
 import {
   activateFocused,
   focusFirst,
@@ -44,10 +38,18 @@ import {
   resolveBindings,
   useGamepad,
   usePadCapture,
+  type NavDirection,
   type PadBindings,
   type PadInfo,
   type PadLayout,
 } from "./gamepad";
+
+const ARROW_KEYS: Record<string, NavDirection | undefined> = {
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+};
 
 /**
  * Every skin, keyed by the value stored in settings.
@@ -204,8 +206,8 @@ export default function App() {
   // it survives a restart without a second store.
   const loadSkin = useCallback(async () => {
     try {
-      const values = await api.getSettings();
-      setSkin(isSkin(values.ui_skin) ? values.ui_skin : DEFAULT_SKIN);
+      const [values, runtime] = await Promise.all([api.getSettings(), api.runtimeInfo()]);
+      setSkin(pickSkin(values, runtime.gameMode));
       setSetupDismissed(values.setup_dismissed === "1");
 
       const layout = values.pad_layout;
@@ -493,16 +495,35 @@ export default function App() {
     if (skin === "launchbox" && selectedId !== null) return setSelectedId(null);
   }, [statsOpen, settingsOpen, detailOpen, skin, selectedId]);
 
-  // Escape does what Back does, so the same way out exists without a pad.
+  // The keyboard does what a pad does: Escape is Back, and the arrows move
+  // as the D-pad does. That is also what Steam Input sends from a Steam
+  // Deck's controls under a keyboard layout. F11 is full screen.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      const el = document.activeElement;
-      // Leave a text field alone; Escape there means "stop typing".
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      if (e.key === "F11") {
+        e.preventDefault();
+        void api.toggleFullscreen();
         return;
       }
-      closeTopmost();
+      const el = document.activeElement;
+      // Leave a text field alone; Escape there means "stop typing", and the
+      // arrows move the cursor.
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      if (e.key === "Escape") {
+        closeTopmost();
+        return;
+      }
+      const dir = ARROW_KEYS[e.key];
+      if (dir && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        if (!focusInDirection(dir)) focusFirst();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

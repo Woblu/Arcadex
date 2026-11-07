@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Arcadex
+GenericName=Game library
+Comment=Your ROM library, with artwork, launched in RetroArch or a standalone emulator
+Exec=arcadex
+Icon=com.boazv.arcadex
+Terminal=false
+Categories=Game;Emulator;
+Keywords=rom;emulator;retroarch;library;launcher;

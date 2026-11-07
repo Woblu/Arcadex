@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.boazv.arcadex</id>
+  <name>Arcadex</name>
+  <summary>Your ROM library, with artwork, ready to play</summary>
+  <developer id="io.github.woblu">
+    <name>Woblu</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">com.boazv.arcadex.desktop</launchable>
+
+  <description>
+    <p>
+      Point Arcadex at the folders where you keep your ROMs. It identifies each
+      one by its contents, fetches box art and details, and launches it in
+      RetroArch or a standalone emulator. Play time is recorded per game.
+    </p>
+    <ul>
+      <li>Six layouts, from a dense desktop grid to couch layouts made for a controller</li>
+      <li>Saves and play time kept the same across machines, through a folder you already sync</li>
+      <li>Disc images, multi-disc games and console game folders recognised as the games they are</li>
+      <li>ROM hacks, cheats and dump verification against No-Intro and Redump catalogues</li>
+    </ul>
+    <p>
+      Arcadex works with games you already have. It does not search for or
+      download games, BIOS files, firmware or keys.
+    </p>
+  </description>
+
+  <url type="homepage">https://woblu.github.io/Arcadex/</url>
+  <url type="bugtracker">https://github.com/Woblu/Arcadex/issues</url>
+  <url type="vcs-browser">https://github.com/Woblu/Arcadex</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://woblu.github.io/Arcadex/shots/skin-arcadex.webp</image>
+      <caption>The desktop library</caption>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Game</category>
+    <category>Emulator</category>
+  </categories>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>gamepad</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.16.0" date="2026-11-07">
+      <description>
+        <p>
+          Playdex is now Arcadex. Saves and play time sync between machines,
+          and this Flatpak runs on the Steam Deck, opening full screen in a
+          couch layout from Game Mode.
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>

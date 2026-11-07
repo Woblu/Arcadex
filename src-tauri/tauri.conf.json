@@ -57,6 +57,8 @@
       "icons/icon.ico"
     ],
     "createUpdaterArtifacts": true,
+    "category": "Game",
+    "shortDescription": "A ROM library manager and emulator launcher.",
     "macOS": {
       "signingIdentity": "-"
     }

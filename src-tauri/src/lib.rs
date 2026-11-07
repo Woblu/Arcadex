@@ -9,6 +9,7 @@ mod emulators;
 mod error;
 mod hacks;
 mod hashing;
+mod host;
 mod launch;
 mod media;
 mod models;
@@ -112,6 +113,21 @@ fn media_protocol_response(
         .header("Cache-Control", "max-age=86400")
         .body(bytes)
         .unwrap()
+}
+
+/// What Arcadex is running on: inside a Flatpak, in Steam's Game Mode, on a
+/// Steam Deck.
+#[tauri::command]
+fn runtime_info() -> host::Runtime {
+    host::runtime()
+}
+
+/// Full screen and back, for F11 and for the couch.
+#[tauri::command]
+fn toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
+    let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(next).map_err(|e| e.to_string())?;
+    Ok(next)
 }
 
 #[tauri::command]
@@ -283,10 +299,20 @@ pub fn run() {
                 vault,
             });
 
+            // Started from Steam's Game Mode, there is no desktop to keep a
+            // window on: fill the screen, as every other game there does.
+            if host::runtime().game_mode {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_fullscreen(true);
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_paths,
+            runtime_info,
+            toggle_fullscreen,
             commands::add_dropped,
             commands::import_dat,
             commands::dat_status,

@@ -347,7 +347,18 @@ fn places() -> Vec<(PathBuf, usize)> {
 pub fn detect() -> Vec<Found> {
     let mut paths: Vec<PathBuf> = Vec::new();
     for (dir, depth) in places() {
-        search(&dir, depth, &mut paths);
+        if crate::host::host_only(&dir) {
+            // The host's own folders, from inside the Flatpak: listed by the
+            // host, one level, since that is all these are searched to.
+            for name in crate::host::list(&dir) {
+                let path = dir.join(name);
+                if runnable(&path) && recognise(&path.to_string_lossy()).is_some() {
+                    paths.push(path);
+                }
+            }
+        } else {
+            search(&dir, depth, &mut paths);
+        }
     }
     found_from(paths)
 }

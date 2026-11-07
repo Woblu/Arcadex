@@ -23,6 +23,7 @@ import type {
   SaveEntry,
   ProviderStatus,
   Settings,
+  Runtime,
   SetupStatus,
   SyncImported,
   SyncStatus,
@@ -79,6 +80,18 @@ export const missingReport = () =>
   invoke<{ missing: number; unreachable: number }>("missing_report");
 
 export const cleanMissing = () => invoke<number>("clean_missing");
+
+/** What Arcadex is running on. Asked once: it does not change while running. */
+let runtime: Promise<Runtime> | null = null;
+export const runtimeInfo = () =>
+  (runtime ??= invoke<Runtime>("runtime_info").catch(() => ({
+    sandboxed: false,
+    gameMode: false,
+    steamDeck: false,
+  })));
+
+/** Full screen and back. Resolves to whether it is now full screen. */
+export const toggleFullscreen = () => invoke<boolean>("toggle_fullscreen");
 
 /** How far setting up has got, for the first-run checklist. */
 export const setupStatus = () => invoke<SetupStatus>("setup_status");

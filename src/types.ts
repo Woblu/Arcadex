@@ -165,6 +165,15 @@ export interface SetupStatus {
   descriptions: boolean;
 }
 
+/** What Arcadex is running on. */
+export interface Runtime {
+  /** Inside a Flatpak, as on a Steam Deck. */
+  sandboxed: boolean;
+  /** Started from Steam's Game Mode. */
+  gameMode: boolean;
+  steamDeck: boolean;
+}
+
 /** Saves and play time shared through a folder the user already syncs. */
 export interface SyncStatus {
   enabled: boolean;

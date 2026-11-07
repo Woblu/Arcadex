@@ -588,6 +588,39 @@ every press on such a pad in the opposite direction.)
 The focus ring thickens while a pad is connected, since it has to be visible
 from a sofa.
 
+The keyboard does what a pad does: the arrow keys move as the D-pad does,
+Enter presses what is focused, and Escape is Back. **F11** goes full screen
+and back.
+
+### Steam Deck
+
+Every release has two ways onto a Deck, both installed from Desktop Mode:
+
+- **The Flatpak**, `Arcadex_x86_64.flatpak`. Open Konsole where it
+  downloaded and run `flatpak install --user Arcadex_x86_64.flatpak`. It
+  shows up in the application menu like anything from Discover.
+- **The AppImage.** Mark it executable (right-click → Properties →
+  Permissions) and run it.
+
+To play from Game Mode, add it to Steam with **Add a Non-Steam Game**. Started
+from there, Arcadex opens full screen in the Lounge layout. Game Mode keeps a
+layout of its own, so choosing another one there leaves the desktop's alone.
+
+Emulators come from Discover as usual, RetroArch included, and **Detect**
+under **Settings → Emulators** finds them. AppImages in `~/Applications`,
+where EmuDeck puts them, are found too. ROMs on the SD card are under
+`/run/media`.
+
+The Flatpak runs in a sandbox and the emulators do not, so it starts them on
+the Deck itself through `flatpak-spawn --host`. That is what its permission
+to talk to Flatpak is for. It can read your home folder, removable drives,
+and RetroArch's own folder, and nothing else.
+
+If the controls do nothing in Game Mode, the Deck is sending something
+Arcadex does not read as a controller. In the game's controller settings,
+pick the **Web Browser** layout: the D-pad becomes the arrow keys, A is Enter
+and B is Escape, which Arcadex reads exactly as a pad.
+
 ### Stats
 
 Playtime is recorded per session. The library view shows total time, session

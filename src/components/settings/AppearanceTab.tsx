@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import * as api from "../../api";
 import type { PadBindings, PadLayout } from "../../gamepad";
-import { SKINS, isSkin, DEFAULT_SKIN, type SkinName } from "../../skins/shell";
+import { SKINS, pickSkin, skinKey, type SkinName } from "../../skins/shell";
 import type { Settings } from "../../types";
 import {
   checkForUpdate,
@@ -27,9 +27,11 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
   const [updateNote, setUpdateNote] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [download, setDownload] = useState<DownloadState>({ phase: "idle" });
+  const [gameMode, setGameMode] = useState(false);
 
   useEffect(() => {
     void currentVersion().then(setVersion);
+    void api.runtimeInfo().then((r) => setGameMode(r.gameMode));
   }, []);
 
   /** Choices made here take effect at once, so they are saved at once. */
@@ -65,7 +67,7 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
     }
   };
 
-  const current = isSkin(settings.ui_skin) ? settings.ui_skin : DEFAULT_SKIN;
+  const current = pickSkin(settings, gameMode);
 
   return (
     <>
@@ -73,6 +75,15 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
         The same library, laid out for wherever you are using it. Every layout
         shows the same games and shares the same settings — only the shape
         changes.
+        {gameMode && (
+          <>
+            <br />
+            <br />
+            This is Steam's Game Mode, which keeps a layout of its own: the one
+            picked here is used in Game Mode, and the desktop keeps its own.
+            F11, or the menu, leaves full screen.
+          </>
+        )}
       </div>
 
       <div className="skin-picker">
@@ -82,7 +93,7 @@ export default function AppearanceTab({ settings, setSettings, onError, onSkinCh
             className={`skin-option ${current === option.value ? "on" : ""}`}
             onClick={() => {
               onSkinChange(option.value);
-              saveNow({ ...settings, ui_skin: option.value });
+              saveNow({ ...settings, [skinKey(gameMode)]: option.value });
             }}
           >
             <SkinPreview skin={option.value} />

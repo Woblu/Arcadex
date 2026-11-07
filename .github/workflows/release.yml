@@ -174,6 +174,59 @@ jobs:
         with:
           subject-path: ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), ',') }}
 
+  # The Steam Deck build: a Flatpak made from the .deb the Linux job just
+  # attached, so it is the same program in a sandbox. Not something the
+  # release waits on - a Flatpak that will not build is a reason to fix the
+  # Flatpak, not to hold back Windows and macOS - so the release publishes
+  # without it and it attaches itself when it is done.
+  flatpak:
+    needs: [create-release, build]
+    if: always() && needs.create-release.result == 'success'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the .deb from the draft
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const release_id = ${{ needs.create-release.outputs.release_id }};
+            const assets = await github.paginate(
+              github.rest.repos.listReleaseAssets, { owner, repo, release_id });
+            const deb = assets.find((a) => a.name.endsWith('_amd64.deb'));
+            if (!deb) throw new Error('The Linux build attached no .deb');
+            const { data } = await github.rest.repos.getReleaseAsset({
+              owner, repo, asset_id: deb.id,
+              headers: { accept: 'application/octet-stream' },
+            });
+            fs.writeFileSync('packaging/flatpak/arcadex_amd64.deb', Buffer.from(data));
+
+      - name: Build the Flatpak
+        uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          manifest-path: packaging/flatpak/com.boazv.arcadex.yml
+          bundle: Arcadex.flatpak
+          cache-key: flatpak-${{ github.sha }}
+
+      - name: Attach it to the release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              name: 'Arcadex_x86_64.flatpak',
+              data: fs.readFileSync('Arcadex.flatpak'),
+            });
+
   publish-release:
     needs: [create-release, build]
     # Every platform has to have built. If one did not, the release stays a

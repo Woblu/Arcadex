@@ -62,6 +62,28 @@ export function isSkin(value: string | undefined): value is SkinName {
   return SKINS.some((skin) => skin.value === value);
 }
 
+/**
+ * The layout used in Steam's Game Mode when none has been chosen there: one
+ * made for a pad and a screen across the room.
+ */
+export const GAME_MODE_SKIN: SkinName = "steam";
+
+/**
+ * Where the layout choice is kept. Game Mode keeps its own, so a Steam Deck
+ * can be a couch console docked to a TV and a desktop library in Desktop
+ * Mode, without changing it back each time.
+ */
+export function skinKey(gameMode: boolean): "ui_skin" | "ui_skin_game_mode" {
+  return gameMode ? "ui_skin_game_mode" : "ui_skin";
+}
+
+/** The layout to show, from the saved settings. */
+export function pickSkin(settings: Record<string, string | undefined>, gameMode: boolean): SkinName {
+  const chosen = settings[skinKey(gameMode)];
+  if (isSkin(chosen)) return chosen;
+  return gameMode ? GAME_MODE_SKIN : DEFAULT_SKIN;
+}
+
 export interface ShellProps {
   games: Game[];
   platforms: PlatformInfo[];

@@ -298,12 +298,18 @@ pub fn find_cores_dir(exe: &Path) -> Option<PathBuf> {
 pub fn find_retroarch() -> Option<DetectedEmulator> {
     let found = candidates()
         .into_iter()
-        .find(|(p, _)| p.is_file())
+        .find(|(p, _)| p.is_file() || (crate::host::host_only(p) && crate::host::exists(p)))
         .map(|(p, source)| (p, source))
         .or_else(|| from_path_env().map(|p| (p, "PATH")))?;
 
     let (exe, source) = found;
-    let exe = tidy(exe.canonicalize().unwrap_or(exe));
+    // Not a Flatpak's launcher, though: it links to a folder named after the
+    // build it came with, which the next update of the emulator removes.
+    let exe = if exe.to_string_lossy().contains("/flatpak/exports/bin/") {
+        exe
+    } else {
+        tidy(exe.canonicalize().unwrap_or(exe))
+    };
     let cores_dir = find_cores_dir(&exe).map(tidy);
     let core_count = cores_dir.as_deref().map(count_cores).unwrap_or(0);
 

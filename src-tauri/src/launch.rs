@@ -1,7 +1,6 @@
 //! Launching games and recording how long they were played.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -642,7 +641,7 @@ pub fn build_command(
             AppError::Other("RetroArch path is not set — add it in Settings".into())
         })?;
     let ra_path = PathBuf::from(&retroarch);
-    if !ra_path.exists() {
+    if !crate::host::exists(&ra_path) {
         return Err(AppError::Other(format!(
             "RetroArch not found at: {retroarch} — check the path in Settings, \
              or press Detect RetroArch"
@@ -659,7 +658,7 @@ pub fn build_command(
         })?;
 
     let core_path = cores_dir.join(core_filename(&core));
-    if !core_path.exists() {
+    if !crate::host::exists(&core_path) {
         return Err(AppError::Other(format!(
             "Core not found: {}",
             core_path.to_string_lossy()
@@ -787,13 +786,10 @@ pub fn launch(
         let _ = app.emit("sync-note", serde_json::json!({ "message": note }));
     }
 
-    let mut cmd = Command::new(&exe);
+    // Started on the host, which is only different from here inside the
+    // Flatpak build, where the emulators are outside the sandbox.
+    let mut cmd = crate::host::command(&exe, Path::new(&exe).parent());
     cmd.args(&args);
-    if let Some(dir) = Path::new(&exe).parent() {
-        if dir.is_dir() {
-            cmd.current_dir(dir);
-        }
-    }
 
     let child = cmd
         .spawn()

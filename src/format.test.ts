@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { formatPlaytime, formatSize, platformName } from "./api";
-import { isSkin, SKINS } from "./skins/shell";
+import { DEFAULT_SKIN, GAME_MODE_SKIN, isSkin, pickSkin, SKINS } from "./skins/shell";
 import { formatBytes } from "./update";
 import { ago } from "./components/settings/SyncTab";
 
@@ -72,5 +72,18 @@ describe("ago", () => {
   });
   it("does not go negative when clocks disagree", () => {
     expect(ago(now + 500, now)).toBe("just now");
+  });
+});
+
+describe("pickSkin", () => {
+  it("keeps Game Mode's layout apart from the desktop's", () => {
+    expect(pickSkin({}, false)).toBe(DEFAULT_SKIN);
+    expect(pickSkin({}, true)).toBe(GAME_MODE_SKIN);
+    expect(pickSkin({ ui_skin: "wii" }, false)).toBe("wii");
+    // A desktop choice does not follow into Game Mode, or the other way.
+    expect(pickSkin({ ui_skin: "launchbox" }, true)).toBe(GAME_MODE_SKIN);
+    expect(pickSkin({ ui_skin_game_mode: "switch" }, false)).toBe(DEFAULT_SKIN);
+    expect(pickSkin({ ui_skin_game_mode: "switch" }, true)).toBe("switch");
+    expect(pickSkin({ ui_skin_game_mode: "nonsense" }, true)).toBe(GAME_MODE_SKIN);
   });
 });
