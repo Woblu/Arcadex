@@ -780,6 +780,13 @@ pub fn launch(
         command
     };
 
+    // Newer saves from another machine, if this one syncs. Never a reason
+    // not to start: a sync that cannot happen says so and the game starts
+    // with what is here.
+    if let Some(note) = crate::sync::before_play(conn, game, cache_root) {
+        let _ = app.emit("sync-note", serde_json::json!({ "message": note }));
+    }
+
     let mut cmd = Command::new(&exe);
     cmd.args(&args);
     if let Some(dir) = Path::new(&exe).parent() {
@@ -795,6 +802,7 @@ pub fn launch(
     let started_at = db::now();
     let game_id = game.id;
     let title = game.title.clone();
+    let played = game.clone();
     let app_handle = app.clone();
     // An owned handle, so the waiting thread does not borrow the app.
     let db_handle = app.state::<crate::db::Db>().0.clone();
@@ -822,6 +830,11 @@ pub fn launch(
                 "seconds": seconds,
             }),
         );
+
+        // The emulator wrote its saves on the way out, so they are whole now.
+        if let Some(note) = crate::sync::after_play(&db_handle, &played) {
+            let _ = app_handle.emit("sync-note", serde_json::json!({ "message": note }));
+        }
     });
 
     Ok(())

@@ -19,6 +19,7 @@ mod saves;
 mod scan;
 mod secrets;
 mod signature;
+mod sync;
 mod scrape;
 
 use std::path::PathBuf;
@@ -317,6 +318,8 @@ pub fn run() {
             commands::clean_missing,
             commands::missing_report,
             commands::setup_status,
+            commands::sync_status,
+            commands::sync_now,
             commands::scrape_library,
             commands::scrape_one,
             commands::cancel_scrape,

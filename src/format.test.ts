@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { formatPlaytime, formatSize, platformName } from "./api";
 import { isSkin, SKINS } from "./skins/shell";
 import { formatBytes } from "./update";
+import { ago } from "./components/settings/SyncTab";
 
 describe("formatPlaytime", () => {
   it("reads naturally from seconds to hours", () => {
@@ -57,5 +58,19 @@ describe("listOf", () => {
     expect(listOf(["PlayStation 3", "Xbox 360"])).toBe("PlayStation 3 and Xbox 360");
     expect(listOf(["A", "B", "C"])).toBe("A, B and C");
     expect(listOf(["A", "B", "C", "D", "E"])).toBe("A, B and 3 more");
+  });
+});
+
+describe("ago", () => {
+  const now = 1_000_000;
+  it("says when another machine last synced, roughly", () => {
+    expect(ago(now - 30, now)).toBe("just now");
+    expect(ago(now - 60 * 12, now)).toBe("12 minutes ago");
+    expect(ago(now - 3600 * 5, now)).toBe("5 hours ago");
+    expect(ago(now - 3600 * 30, now)).toBe("30 hours ago");
+    expect(ago(now - 86400 * 2, now)).toBe("2 days ago");
+  });
+  it("does not go negative when clocks disagree", () => {
+    expect(ago(now + 500, now)).toBe("just now");
   });
 });

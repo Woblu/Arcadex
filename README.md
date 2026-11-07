@@ -483,6 +483,41 @@ directories, the per-core subfolders RetroArch creates when sorting is on, and
 the ROM's own folder. Back up copies everything into a dated folder. Only save
 states can be deleted; battery saves hold real progress and are refused.
 
+### Sync between machines
+
+**Settings → Sync** keeps saves and play time the same on every machine you
+play on, through a folder you already sync: Syncthing, OneDrive, Dropbox or a
+NAS share. There is no server and Arcadex uploads nothing; it writes into the
+folder and whatever syncs the folder carries it across.
+
+- **Play time.** Each machine keeps a journal of its own sessions in the
+  folder and reads everyone else's at startup, or when you press **Sync play
+  time now**. A session is only ever counted once, and one for a game this
+  machine does not have yet is picked up once the game is added.
+- **Saves.** Before a game starts, newer saves from another machine are
+  brought in; this machine's are backed up first. After it closes, its saves
+  go into the folder if they changed. Each machine keeps its last ten
+  versions there.
+- **Both changed?** The newer wins. The other is kept, as a backup here or a
+  version in the folder, so nothing is lost either way.
+
+Games are matched by what they are rather than where they are: the same dump
+is the same game on every machine, even under another file name or zipped on
+one and not the other. Saves follow RetroArch games. Standalone emulators keep
+theirs in their own memory cards and folders, which can be pointed inside the
+sync folder in each emulator.
+
+Every file in the folder has exactly one machine writing it, because sync
+tools handle two machines changing the same file badly. The layout:
+
+```text
+Arcadex/
+  machines/<machine>.json             who each machine is, and when it last synced
+  play/<machine>.jsonl                every session played on that machine
+  saves/<system>/<game>/<machine>.json   the newest saves that machine has
+  saves/<system>/<game>/versions/        the files, one folder per version
+```
+
 ### Skins
 
 Six layouts, under **Settings → Appearance**:

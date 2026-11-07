@@ -136,6 +136,28 @@ pub fn find(exe: &Path, rom_path: &Path, rom_name: &str, core_folder: &str) -> V
     out
 }
 
+/// Where RetroArch will look for a save (`state = false`) or a save state of
+/// this ROM's that is not there yet: its configured folder, inside a folder
+/// per core when it sorts them that way, or beside the ROM when nothing is
+/// configured.
+pub fn target_dir(exe: &Path, rom_path: &Path, core_folder: &str, state: bool) -> PathBuf {
+    let (key, sort) = if state {
+        ("savestate_directory", "sort_savestates_enable")
+    } else {
+        ("savefile_directory", "sort_savefiles_enable")
+    };
+    match crate::cheats::config_dir(exe, key) {
+        Some(dir) if crate::cheats::config_flag(exe, sort) && !core_folder.is_empty() => {
+            dir.join(core_folder)
+        }
+        Some(dir) => dir,
+        None => rom_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default(),
+    }
+}
+
 /// Copy the given files into a dated folder so a bad state can be undone.
 pub fn back_up(entries: &[SaveEntry], root: &Path, game_title: &str) -> Result<PathBuf> {
     let stamp = crate::db::now();

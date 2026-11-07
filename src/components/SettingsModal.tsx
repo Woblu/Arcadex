@@ -9,9 +9,17 @@ import EmulatorsTab from "./settings/EmulatorsTab";
 import FoldersTab from "./settings/FoldersTab";
 import HacksTab from "./settings/HacksTab";
 import MetadataTab from "./settings/MetadataTab";
+import SyncTab from "./settings/SyncTab";
 import type { TabProps } from "./settings/tab";
 
-export type Tab = "folders" | "emulators" | "metadata" | "hacks" | "dats" | "appearance";
+export type Tab =
+  | "folders"
+  | "emulators"
+  | "metadata"
+  | "hacks"
+  | "dats"
+  | "sync"
+  | "appearance";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "folders", label: "ROM folders" },
@@ -19,6 +27,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "metadata", label: "Metadata" },
   { id: "hacks", label: "ROM hacks" },
   { id: "dats", label: "Verification" },
+  { id: "sync", label: "Sync" },
   { id: "appearance", label: "Appearance" },
 ];
 
@@ -127,6 +136,7 @@ export default function SettingsModal({
           )}
           {panel("hacks", <HacksTab {...shared("hacks")} />)}
           {panel("dats", <DatsTab {...shared("dats")} />)}
+          {panel("sync", <SyncTab {...shared("sync")} />)}
           {panel("appearance", <AppearanceTab {...shared("appearance")} onSkinChange={onSkinChange} />)}
         </div>
 

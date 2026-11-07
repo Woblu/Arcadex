@@ -130,6 +130,15 @@ CREATE TABLE IF NOT EXISTS play_sessions (
     started_at INTEGER NOT NULL,
     seconds    INTEGER NOT NULL DEFAULT 0
 );
+
+-- What each game's saves last synced as: the fingerprint of this machine's
+-- files afterwards, and the version in the sync folder they matched.
+CREATE TABLE IF NOT EXISTS save_sync (
+    game_id   INTEGER PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,
+    digest    TEXT NOT NULL,
+    version   TEXT NOT NULL,
+    synced_at INTEGER NOT NULL
+);
 "#;
 
 const GAME_COLS: &str = "id, path, filename, platform, size, crc32, md5, sha1, inner_name, \
@@ -271,6 +280,25 @@ fn migrate(conn: &Connection) -> Result<()> {
             conn.execute(&format!("ALTER TABLE games ADD COLUMN {column} {decl}"), [])?;
         }
     }
+
+    // Which machine a session was played on, for sessions read in from a
+    // sync folder. Empty for the ones played here. A session read twice is
+    // the same machine starting the same game at the same second, and the
+    // index is what makes the second read add nothing.
+    let has_origin: bool = conn
+        .prepare("PRAGMA table_info(play_sessions)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|c| c == "origin");
+    if !has_origin {
+        conn.execute("ALTER TABLE play_sessions ADD COLUMN origin TEXT", [])?;
+    }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS play_sessions_origin
+         ON play_sessions(origin, game_id, started_at) WHERE origin IS NOT NULL",
+        [],
+    )?;
     Ok(())
 }
 

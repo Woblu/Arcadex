@@ -471,6 +471,10 @@ input:focus, select:focus, textarea:focus {
   margin: 22px 0 9px;
 }
 
+.plain-list { list-style: none; margin: 0; padding: 0; }
+.plain-list li { padding: 5px 0; font-size: 13px; }
+.plain-list li + li { border-top: 1px solid var(--border); }
+
 .description { font-size: 13px; color: var(--text-2); line-height: 1.6; white-space: pre-wrap; }
 
 .path-box {

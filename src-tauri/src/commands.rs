@@ -355,6 +355,22 @@ pub async fn setup_status(app: AppHandle) -> Result<SetupStatus> {
     .await
 }
 
+/// Where sync stands: the folder, whether it is there, and who else syncs.
+#[tauri::command]
+pub async fn sync_status(app: AppHandle) -> Result<crate::sync::Status> {
+    off_main(move || crate::sync::status(&app.state::<Db>().0)).await
+}
+
+/// Read the other machines' play time now, and write this one's.
+#[tauri::command]
+pub async fn sync_now(app: AppHandle) -> Result<crate::sync::Imported> {
+    off_main(move || {
+        crate::sync::sync_play(&app.state::<Db>().0)?
+            .ok_or_else(|| AppError::Other("Choose a sync folder first".into()))
+    })
+    .await
+}
+
 /// What cleaning up would remove, so it can be said before it is done.
 #[tauri::command]
 pub async fn missing_report(app: AppHandle) -> Result<MissingReport> {
@@ -1041,7 +1057,7 @@ pub async fn test_credentials(app: AppHandle) -> Result<Vec<scrape::ProviderStat
 
 /// The ROM's own name, which is how both the cheat and artwork databases
 /// index it — not the cleaned-up display title.
-fn rom_name_of(game: &Game) -> String {
+pub(crate) fn rom_name_of(game: &Game) -> String {
     let raw = game.inner_name.as_deref().unwrap_or(&game.filename);
     std::path::Path::new(raw)
         .file_stem()
@@ -1538,7 +1554,7 @@ pub async fn download_hack_bundle(app: AppHandle, bundle: HackBundle) -> Result<
 
 // --------------------------------------------------------------- saves
 
-fn retroarch_exe(conn: &rusqlite::Connection) -> Result<std::path::PathBuf> {
+pub(crate) fn retroarch_exe(conn: &rusqlite::Connection) -> Result<std::path::PathBuf> {
     let path = db::get_setting(conn, "retroarch_path")?
         .map(|p| crate::detect::clean_path(&p))
         .filter(|p| !p.is_empty())

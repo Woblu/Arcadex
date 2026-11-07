@@ -585,6 +585,14 @@ pub fn config_dir(exe: &Path, key: &str) -> Option<PathBuf> {
     })
 }
 
+/// Whether one of RetroArch's on/off settings is on.
+pub fn config_flag(exe: &Path, key: &str) -> bool {
+    config_path_for(exe)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| config_value(&text, key))
+        .is_some_and(|v| v == "true")
+}
+
 fn config_value(text: &str, key: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();

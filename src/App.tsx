@@ -167,6 +167,35 @@ export default function App() {
     void refreshGames();
   }, [refreshGames]);
 
+  // A short note in the corner, for sync. Its own timer, so an older note's
+  // never clears a newer one early.
+  const noteHide = useRef<number | null>(null);
+  const flashNote = useCallback((text: string) => {
+    setDropNote(text);
+    if (noteHide.current) window.clearTimeout(noteHide.current);
+    noteHide.current = window.setTimeout(() => setDropNote(null), 8000);
+  }, []);
+
+  // Play time from other machines, once at startup. Sync being off, or its
+  // folder not being there, are both ordinary, so neither is reported here.
+  const refreshAfterSync = useStable(() => {
+    void refreshGames();
+    void refreshSidebar();
+  });
+  useEffect(() => {
+    api
+      .syncNow()
+      .then((got) => {
+        if (got.sessions === 0) return;
+        refreshAfterSync();
+        flashNote(
+          `Added ${got.sessions} session${got.sessions === 1 ? "" : "s"} ` +
+            `(${api.formatPlaytime(got.seconds)}) from your other machines.`,
+        );
+      })
+      .catch(() => {});
+  }, [refreshAfterSync, flashNote]);
+
   useEffect(() => {
     void refreshSidebar();
   }, [refreshSidebar]);
@@ -239,12 +268,13 @@ export default function App() {
         void refreshGames();
         void refreshSidebar();
       }),
+      listen<{ message: string }>("sync-note", (e) => flashNote(e.payload.message)),
     ];
 
     return () => {
       unlisteners.forEach((p) => void p.then((f) => f()));
     };
-  }, [refreshGames, refreshSidebar]);
+  }, [refreshGames, refreshSidebar, flashNote]);
 
   function scheduleHide(timer: React.MutableRefObject<number | null>, fn: () => void) {
     if (timer.current) window.clearTimeout(timer.current);
@@ -325,12 +355,11 @@ export default function App() {
     });
     if (!result) return;
 
-    setDropNote(
+    flashNote(
       result.reasons.length > 0
         ? `${message(result)} — ${result.reasons[0]}`
         : message(result),
     );
-    window.setTimeout(() => setDropNote(null), 6000);
 
     if (result.lastId !== null) setSelectedId(result.lastId);
     if (result.added > 0) {

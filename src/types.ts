@@ -165,6 +165,23 @@ export interface SetupStatus {
   descriptions: boolean;
 }
 
+/** Saves and play time shared through a folder the user already syncs. */
+export interface SyncStatus {
+  enabled: boolean;
+  folder: string | null;
+  /** False when the folder is a drive or share that is not there right now. */
+  reachable: boolean;
+  /** What this computer is called on the others. */
+  name: string;
+  others: Array<{ name: string; lastSeen: number }>;
+}
+
+/** What reading the other machines' play time added. */
+export interface SyncImported {
+  sessions: number;
+  seconds: number;
+}
+
 /** A standalone emulator found installed. */
 export interface FoundEmulator {
   emulator: string;

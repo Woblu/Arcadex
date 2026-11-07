@@ -24,6 +24,8 @@ import type {
   ProviderStatus,
   Settings,
   SetupStatus,
+  SyncImported,
+  SyncStatus,
 } from "./types";
 
 // ------------------------------------------------------------- library
@@ -80,6 +82,14 @@ export const cleanMissing = () => invoke<number>("clean_missing");
 
 /** How far setting up has got, for the first-run checklist. */
 export const setupStatus = () => invoke<SetupStatus>("setup_status");
+
+// ----------------------------------------------------------------- sync
+
+/** Where sync stands: the folder, whether it is there, who else syncs. */
+export const syncStatus = () => invoke<SyncStatus>("sync_status");
+
+/** Read the other machines' play time in now, and write this one's. */
+export const syncNow = () => invoke<SyncImported>("sync_now");
 
 // -------------------------------------------------------------- scrape
 
