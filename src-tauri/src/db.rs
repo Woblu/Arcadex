@@ -1981,9 +1981,17 @@ mod removal_tests {
         std::fs::write(&here, b"x").unwrap();
         add(&conn, 1, &here.to_string_lossy(), "");
         add(&conn, 2, &dir.join("deleted.sfc").to_string_lossy(), "");
-        // A share no machine on earth has.
-        add(&conn, 3, r"\arcadex-no-such-host\roms\game.sfc", "");
-        add_folder(&conn, r"\arcadex-no-such-host\roms", None).unwrap();
+        // A share no machine on earth has, or on Linux and macOS a card that
+        // is not mounted - a Steam Deck's SD card taken out, say. A Windows
+        // path means nothing there: backslashes are not separators, so it
+        // reads as one file with a strange name in the current folder.
+        let (root, game) = if cfg!(windows) {
+            (r"\arcadex-no-such-host\roms", r"\arcadex-no-such-host\roms\game.sfc")
+        } else {
+            ("/run/media/arcadex-no-such-card/roms", "/run/media/arcadex-no-such-card/roms/game.sfc")
+        };
+        add(&conn, 3, game, "");
+        add_folder(&conn, root, None).unwrap();
 
         let (missing, unreachable) = missing_entries(&conn).unwrap();
         assert_eq!(missing, vec![2]);
