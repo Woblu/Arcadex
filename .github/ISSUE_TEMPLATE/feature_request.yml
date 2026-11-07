@@ -1,0 +1,26 @@
+name: An idea
+description: Something Playdex should do, or do differently.
+labels: [idea]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/Woblu/Playdex/blob/master/ROADMAP.md) first; it may already be planned.
+
+        Playdex works with games you already have. It will not search for, download or link to games, BIOS files, firmware or keys, so ideas that need it to are out of scope.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The situation, rather than the solution. "I keep my saves on two machines and ..." is more useful than "add sync".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: textarea
+    id: else
+    attributes:
+      label: How you manage today
+      description: Another app, a script, by hand.

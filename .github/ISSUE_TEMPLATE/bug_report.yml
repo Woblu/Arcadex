@@ -1,0 +1,55 @@
+name: Something is wrong
+description: A game not found, a launch that fails, something that looks broken.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The more exactly you can say what happened, the quicker it gets fixed.
+
+        Please do not ask for, link to or attach games, BIOS files, firmware or keys. Issues that do are closed.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      placeholder: |
+        1. Add a folder holding ...
+        2. Press Scan folders
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings → Appearance → About.
+      placeholder: "0.15.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: System
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Steam Deck / SteamOS
+    validations:
+      required: true
+  - type: input
+    id: emulator
+    attributes:
+      label: Console and emulator, if it is about a game
+      placeholder: "PlayStation 3, RPCS3 0.0.38"
+  - type: textarea
+    id: detail
+    attributes:
+      label: Anything else
+      description: |
+        The launch command from the game's panel, the error text, the scan summary, a screenshot. File names are useful; file contents are not needed.

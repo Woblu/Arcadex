@@ -890,6 +890,28 @@ you.
 - The library lives in the app data directory next to the artwork cache, so
   deleting that folder resets everything without touching your ROMs.
 
+## What Playdex will not do
+
+Playdex manages games you already have. It does not search for, download,
+host or link to games, BIOS files, firmware, decryption keys or the tools
+that dump them, and it never will.
+
+- **Emulators are found, not fetched.** Find emulators looks for what you
+  have installed and fills in how to run it. It does not download emulators
+  or say where to get them.
+- **Firmware and keys are yours to provide.** Several emulators need system
+  software or keys dumped from a console you own. Each emulator's own setup
+  guide covers that; Playdex does not.
+- **Artwork and descriptions belong to their owners.** They are fetched at
+  run time from ScreenScraper, TheGamesDB and libretro-thumbnails, for games
+  already in your library, and kept on your machine.
+- **Not affiliated with any console maker.** Console and company names are
+  used only to say which system a game is for; they are trademarks of their
+  owners. The app's icons are its own line drawings, not anyone's logo.
+
+See [SECURITY.md](SECURITY.md) to report a security problem, and
+[CONTRIBUTING.md](CONTRIBUTING.md) to help.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
