@@ -316,6 +316,15 @@ pub fn index_file(
     if let Some(game) = consoles::for_boot_file(path) {
         return index_console_game(conn, &path_str, &game);
     }
+    // The same game zipped up whole is still that game. Nothing in a Games
+    // on Demand package has an extension, so without this a zipped one was
+    // Unidentified.
+    let archived = is_archive(path)
+        .then(|| consoles::identify_archive(path))
+        .flatten();
+    if let Some(game) = archived {
+        return insert_console_record(conn, &path_str, &archived_record(&game, &filename));
+    }
 
     let platform = detect_platform(path, root, override_platform);
 
@@ -335,11 +344,9 @@ pub fn index_file(
         .unwrap_or(0);
 
     // A zipped ROM's real name is the entry inside, which is what the
-    // scrapers index.
-    let name_for_title = hashes
-        .as_ref()
-        .and_then(|h| h.inner_name.clone())
-        .unwrap_or_else(|| filename.clone());
+    // scrapers index - recorded even when the archive is too big to hash.
+    let inner_name = inner_entry(path, hashes.as_ref());
+    let name_for_title = inner_name.clone().unwrap_or_else(|| filename.clone());
 
     let inserted = db::insert_game(
         conn,
@@ -352,7 +359,7 @@ pub fn index_file(
         hashes.as_ref().map(|h| h.crc32.as_str()),
         hashes.as_ref().map(|h| h.md5.as_str()),
         hashes.as_ref().map(|h| h.sha1.as_str()),
-        hashes.as_ref().and_then(|h| h.inner_name.as_deref()),
+        inner_name.as_deref(),
     )?;
 
     if inserted {
@@ -403,12 +410,46 @@ fn needs_console_identity(state: &db::IndexState, game: &ConsoleGame, boot_name:
     state.platform != game.platform && state.filename == boot_name
 }
 
+/// What an archived console game is recorded as. Its name is the archive's,
+/// since that is the file in the library, and its size is everything inside.
+fn archived_record(game: &consoles::ArchivedGame, filename: &str) -> ConsoleRecord {
+    ConsoleRecord {
+        platform: game.platform,
+        title: game.title.clone().unwrap_or_else(|| clean_title(filename)),
+        region: guess_region(filename),
+        size: game.size as i64,
+        serial: game.serial.clone(),
+        filename: filename.to_string(),
+    }
+}
+
+fn is_archive(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| platforms::ARCHIVE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// The ROM's name inside an archive: the one hashed, or for an archive too
+/// large to hash, the one that would have been.
+fn inner_entry(path: &Path, hashes: Option<&hashing::Hashes>) -> Option<String> {
+    hashes
+        .and_then(|h| h.inner_name.clone())
+        .or_else(|| is_archive(path).then(|| hashing::archive_rom_entry(path)).flatten())
+}
+
 fn index_console_game(
     conn: &rusqlite::Connection,
     path_str: &str,
     game: &ConsoleGame,
 ) -> Result<Indexed> {
-    let r = console_record(game);
+    insert_console_record(conn, path_str, &console_record(game))
+}
+
+fn insert_console_record(
+    conn: &rusqlite::Connection,
+    path_str: &str,
+    r: &ConsoleRecord,
+) -> Result<Indexed> {
     let inserted = db::insert_game(
         conn,
         path_str,
@@ -647,9 +688,15 @@ pub fn scan_all(
 
     // Pass 1 — discover candidate files.
     let Discovery {
-        candidates,
+        mut candidates,
         console_games,
     } = discover(&folders);
+
+    // A file dropped onto the window lives outside every library folder, so
+    // walking the folders never reaches it again. It is looked at here too,
+    // so a rule fixed since it was added applies to it as it does to the rest.
+    let app_data = app.try_state::<crate::AppState>().map(|s| s.media_root.clone());
+    candidates.extend(dropped_files(&known, &folders, app_data.as_deref()));
 
     // A scan from before Playdex knew a console's folder layout listed the
     // folder's data files one by one. They are part of one game, now found.
@@ -721,7 +768,29 @@ pub fn scan_all(
                 }
             }
 
-            if needs_reindex(state, &ext) {
+            let archived_console = needs_reindex(state, &ext)
+                && is_archive(path)
+                && consoles::archived_boot_entry(path).is_some();
+
+            if archived_console {
+                // A console game kept zipped. Only an entry nobody could
+                // identify before is described again, so a system picked by
+                // hand stays picked; the names alone say it is one, so the
+                // header inside is read only then.
+                if state.platform == "unknown" {
+                    if let Some(game) = consoles::identify_archive(path) {
+                        let r = archived_record(&game, &filename);
+                        let conn = db_handle.lock().unwrap();
+                        db::set_console_identity(&conn, state.id, r.platform, &r.filename, &r.title, r.size)?;
+                        db::set_serial(&conn, state.id, r.serial.as_deref())?;
+                        tally.reindexed += 1;
+                    } else {
+                        tally.skipped += 1;
+                    }
+                } else {
+                    tally.skipped += 1;
+                }
+            } else if needs_reindex(state, &ext) {
                 let platform = detect_platform(path, root, override_platform.as_deref());
                 let hashes = hashing::hash_rom(path).ok().flatten();
                 let size = hashes
@@ -729,6 +798,7 @@ pub fn scan_all(
                     .map(|h| h.size as i64)
                     .or_else(|| std::fs::metadata(path).ok().map(|m| m.len() as i64))
                     .unwrap_or(0);
+                let inner_name = inner_entry(path, hashes.as_ref());
 
                 let conn = db_handle.lock().unwrap();
                 db::reindex_game(
@@ -739,7 +809,7 @@ pub fn scan_all(
                     hashes.as_ref().map(|h| h.crc32.as_str()),
                     hashes.as_ref().map(|h| h.md5.as_str()),
                     hashes.as_ref().map(|h| h.sha1.as_str()),
-                    hashes.as_ref().and_then(|h| h.inner_name.as_deref()),
+                    inner_name.as_deref(),
                 )?;
                 tally.reindexed += 1;
             } else {
@@ -785,6 +855,30 @@ pub fn scan_all(
     emit(app, "done", total, total, &message, &tally, true);
 
     Ok(tally)
+}
+
+/// Library entries outside every library folder that are still there:
+/// files that were dropped onto the window. Playdex's own files - patched
+/// hacks, disc playlists - live in the app data folder and are left out.
+fn dropped_files(
+    known: &std::collections::HashMap<String, db::IndexState>,
+    folders: &[LibraryFolder],
+    app_data: Option<&Path>,
+) -> Vec<(PathBuf, PathBuf, Option<String>)> {
+    let roots: Vec<PathBuf> = folders.iter().map(|f| PathBuf::from(&f.path)).collect();
+    let mut out: Vec<(PathBuf, PathBuf, Option<String>)> = known
+        .keys()
+        .map(PathBuf::from)
+        .filter(|p| !roots.iter().any(|r| p.starts_with(r)))
+        .filter(|p| !app_data.is_some_and(|d| p.starts_with(d)))
+        .filter(|p| p.is_file())
+        .map(|p| {
+            let parent = p.parent().unwrap_or(&p).to_path_buf();
+            (p, parent, None)
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 /// What walking the library folders turned up.
@@ -1249,6 +1343,92 @@ mod tests {
         assert_eq!(game.title, "Halo 3");
 
         drop(conn);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A Games on Demand package zipped up whole: one game, named from the
+    /// header inside, sized by everything in the archive.
+    #[test]
+    fn indexes_a_zipped_package_as_the_game_inside() {
+        let root = scratch("zippedgod");
+        let zip = root.join("Skate 3.zip");
+        crate::consoles::tests::zipped_package(&zip);
+
+        let conn = db::open(&root.join("library.db")).unwrap();
+        let Indexed::Added(id) = index_file(&conn, &zip, &root, None).unwrap() else {
+            panic!("should be added");
+        };
+        let game = db::get_game(&conn, id).unwrap().unwrap();
+        assert_eq!(game.platform, "xbox360");
+        assert_eq!(game.title, "Skate 3");
+        assert_eq!(game.serial.as_deref(), Some("4D5307E6"));
+        assert_eq!(game.size, 0xB000 + 3000);
+        assert_eq!(game.filename, "Skate 3.zip", "the file in the library is the zip");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The case this was written for: a zipped package added before Playdex
+    /// could read one, sitting in the library as Unidentified.
+    #[test]
+    fn puts_right_a_zipped_package_an_older_scan_left_unidentified() {
+        let root = scratch("zippedold");
+        let zip = root.join("Skate 3.zip");
+        crate::consoles::tests::zipped_package(&zip);
+        let conn = db::open(&root.join("library.db")).unwrap();
+        conn.execute(
+            "INSERT INTO games (path, filename, platform, title, size, added_at)
+             VALUES (?1, 'Skate 3.zip', 'unknown', 'Skate 3', 5870520658, 0)",
+            [zip.to_string_lossy()],
+        )
+        .unwrap();
+        let known = db::index_state(&conn).unwrap();
+        let state = &known[&zip.to_string_lossy().to_string()];
+
+        // What the scan checks, in the order it checks it.
+        assert!(needs_reindex(state, "zip"));
+        assert!(consoles::archived_boot_entry(&zip).is_some());
+        let game = consoles::identify_archive(&zip).unwrap();
+        let r = archived_record(&game, "Skate 3.zip");
+        db::set_console_identity(&conn, state.id, r.platform, &r.filename, &r.title, r.size).unwrap();
+
+        let after = db::get_game(&conn, state.id).unwrap().unwrap();
+        assert_eq!(after.platform, "xbox360");
+        assert_eq!(after.filename, "Skate 3.zip");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file dropped onto the window, outside every library folder, is
+    /// looked at again by a scan. Playdex's own files are not.
+    #[test]
+    fn a_scan_looks_again_at_files_dropped_on_the_window() {
+        let root = scratch("dropped");
+        let library_dir = root.join("Library");
+        let in_library = library_dir.join("a.nes");
+        let dropped = root.join("Desktop").join("Skate 3.zip");
+        let ours = root.join("AppData").join("hacks").join("1").join("hack.sfc");
+        let gone = root.join("Desktop").join("deleted.zip");
+        for p in [&in_library, &dropped, &ours] {
+            put(p, b"x");
+        }
+
+        let state = |id| db::IndexState {
+            id,
+            platform: "unknown".into(),
+            inner_name: None,
+            filename: String::new(),
+            precious: false,
+        };
+        let known: std::collections::HashMap<String, db::IndexState> = [&in_library, &dropped, &ours, &gone]
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| (p.to_string_lossy().to_string(), state(i as i64)))
+            .collect();
+
+        let found = dropped_files(&known, &library(&library_dir), Some(&root.join("AppData")));
+        let paths: Vec<&PathBuf> = found.iter().map(|c| &c.0).collect();
+        assert_eq!(paths, vec![&dropped]);
         let _ = std::fs::remove_dir_all(&root);
     }
 

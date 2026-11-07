@@ -420,11 +420,26 @@ fn read_package(path: &Path) -> Option<ConsoleGame> {
     if path.extension().is_some() {
         return None;
     }
-    let mut head = vec![0u8; 0x1711];
+    let mut head = vec![0u8; PACKAGE_HEADER_BYTES];
     let mut file = std::fs::File::open(path).ok()?;
     file.read_exact(&mut head).ok()?;
+    let (title, serial) = parse_package(&head)?;
 
-    if !matches!(&head[0..4], b"CON " | b"LIVE" | b"PIRS") {
+    Some(ConsoleGame {
+        platform: "xbox360",
+        root: path.parent()?.to_path_buf(),
+        boot: Some(path.to_path_buf()),
+        title,
+        serial: Some(serial),
+    })
+}
+
+/// How much of a package's header holds everything read from it.
+const PACKAGE_HEADER_BYTES: usize = 0x1711;
+
+/// The title and title id in a package header, if it is a game's.
+fn parse_package(head: &[u8]) -> Option<(Option<String>, String)> {
+    if head.len() < PACKAGE_HEADER_BYTES || !matches!(&head[0..4], b"CON " | b"LIVE" | b"PIRS") {
         return None;
     }
     let content_type = u32::from_be_bytes(head[0x344..0x348].try_into().ok()?);
@@ -444,14 +459,196 @@ fn read_package(path: &Path) -> Option<ConsoleGame> {
     };
     // The first display name is English; the title name is the fallback.
     let title = utf16(&head[0x411..0x491]).or_else(|| utf16(&head[0x1691..0x1711]));
+    Some((title, format!("{title_id:08X}")))
+}
 
-    Some(ConsoleGame {
-        platform: "xbox360",
-        root: path.parent()?.to_path_buf(),
-        boot: Some(path.to_path_buf()),
+// ------------------------------------------------------------ in archives
+
+/// A console game kept in a zip or 7z: a Games on Demand package, or one of
+/// the folder layouts above, archived whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedGame {
+    pub platform: &'static str,
+    pub title: Option<String>,
+    pub serial: Option<String>,
+    /// The file the emulator is handed, by its name inside the archive.
+    pub boot_entry: String,
+    /// Everything in the archive, unpacked.
+    pub size: u64,
+}
+
+/// Recognise a console game inside a zip or 7z.
+///
+/// Read off the archive's list of names, the same layouts `identify_dir`
+/// finds on disk, and then the one small file inside that names the game. A
+/// zipped package is a 45 KB header and several gigabytes of data, and only
+/// the header is read.
+pub fn identify_archive(path: &Path) -> Option<ArchivedGame> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !crate::platforms::ARCHIVE_EXTS.contains(&ext.as_str()) {
+        return None;
+    }
+    let entries = crate::hashing::archive_entries(path).ok()?;
+    let read = |name: &str, limit: u64| crate::hashing::read_archive_entry(path, name, limit).ok();
+    identify_entries(&entries, Some(&read))
+}
+
+/// The file inside an archived console game that the emulator starts from,
+/// judged by names alone.
+///
+/// For launching and for showing the launch command, which only need to know
+/// where to point once it is unpacked. Reading a header out of a large solid
+/// 7z can mean decompressing much of it, and the game was already identified
+/// properly when it was indexed.
+pub fn archived_boot_entry(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !crate::platforms::ARCHIVE_EXTS.contains(&ext.as_str()) {
+        return None;
+    }
+    let entries = crate::hashing::archive_entries(path).ok()?;
+    identify_entries(&entries, None).map(|g| g.boot_entry)
+}
+
+type ReadEntry<'a> = &'a dyn Fn(&str, u64) -> Option<Vec<u8>>;
+
+/// The work of `identify_archive`, given the names and a way to read one.
+/// With no way to read, layouts are recognised by their names and nothing
+/// is learnt about the title.
+fn identify_entries(entries: &[(String, u64)], read: Option<ReadEntry>) -> Option<ArchivedGame> {
+    let names_only = read.is_none();
+    let read = |name: &str, limit: u64| read.and_then(|r| r(name, limit));
+    let size: u64 = entries.iter().map(|(_, s)| s).sum();
+    // Compared lowercased with forward slashes; read by the archive's own
+    // spelling.
+    let names: Vec<(String, &str)> = entries
+        .iter()
+        .map(|(n, _)| (n.replace('\\', "/").to_ascii_lowercase(), n.as_str()))
+        .collect();
+    let find = |lower: &str| names.iter().find(|(l, _)| l == lower).map(|(_, n)| *n);
+    // The folder part of a name that ends in `tail`, if it does at a folder
+    // boundary: "Game/PS3_GAME/PARAM.SFO" and "PS3_GAME/PARAM.SFO" both match.
+    let prefix_of = |lower: &str, tail: &str| -> Option<String> {
+        let prefix = lower.strip_suffix(tail)?;
+        (prefix.is_empty() || prefix.ends_with('/')).then(|| prefix.to_string())
+    };
+    let game = |platform, title, serial, boot: &str| ArchivedGame {
+        platform,
         title,
-        serial: Some(format!("{title_id:08X}")),
-    })
+        serial,
+        boot_entry: boot.to_string(),
+        size,
+    };
+    let sfo = |name: &str| read(name, 1024 * 1024).and_then(|b| Sfo::parse(&b));
+
+    // A Games on Demand or Arcade package: a file with no extension in a
+    // folder named for its content type.
+    for (lower, name) in &names {
+        let Some((dir, leaf)) = lower.rsplit_once('/') else { continue };
+        let folder = dir.rsplit('/').next().unwrap_or(dir);
+        if leaf.contains('.') || !PACKAGE_FOLDERS.contains(&folder) {
+            continue;
+        }
+        // Saves and downloadable content use the same container, but live in
+        // other folders; the header is still checked when it can be read.
+        if names_only {
+            return Some(game("xbox360", None, None, name));
+        }
+        if let Some((title, serial)) =
+            read(name, PACKAGE_HEADER_BYTES as u64).and_then(|h| parse_package(&h))
+        {
+            return Some(game("xbox360", title, Some(serial), name));
+        }
+    }
+
+    for (lower, name) in &names {
+        // A PlayStation 3 disc copied off as a folder.
+        if let Some(p) = prefix_of(lower, "ps3_game/param.sfo") {
+            if let Some(boot) = find(&format!("{p}ps3_game/usrdir/eboot.bin")) {
+                let s = sfo(name);
+                return Some(game(
+                    "ps3",
+                    s.as_ref().and_then(|s| s.title()),
+                    s.as_ref().and_then(|s| s.string("TITLE_ID")),
+                    boot,
+                ));
+            }
+        }
+        // A PlayStation 4 or 5 dump.
+        if let Some(p) = prefix_of(lower, "sce_sys/param.json") {
+            if let Some(boot) = find(&format!("{p}eboot.bin")) {
+                let json = read(name, 1024 * 1024)
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+                let (title, serial) = json.as_ref().map(ps5_identity).unwrap_or_default();
+                return Some(game("ps5", title, serial, boot));
+            }
+        }
+        if let Some(p) = prefix_of(lower, "sce_sys/param.sfo") {
+            if let Some(boot) = find(&format!("{p}eboot.bin")) {
+                let s = sfo(name);
+                let playable = s.as_ref().map_or(names_only, |s| {
+                    let category = s.string("CATEGORY").unwrap_or_default().to_ascii_lowercase();
+                    let vita = s.has("PSP2_SYSTEM_VER") || s.has("PSP2_DISP_VER");
+                    !vita && !matches!(category.as_str(), "gp" | "ac")
+                });
+                if playable {
+                    return Some(game(
+                        "ps4",
+                        s.as_ref().and_then(|s| s.title()),
+                        s.as_ref().and_then(|s| s.string("TITLE_ID")),
+                        boot,
+                    ));
+                }
+            }
+        }
+        // An installed PlayStation 3 game, which is not an update.
+        if let Some(p) = prefix_of(lower, "param.sfo") {
+            if !p.ends_with("ps3_game/") && !p.ends_with("sce_sys/") {
+                if let Some(boot) = find(&format!("{p}usrdir/eboot.bin")) {
+                    let s = sfo(name);
+                    let playable = s
+                        .as_ref()
+                        .map_or(names_only, |s| s.string("CATEGORY").as_deref() != Some("GD"));
+                    if playable {
+                        return Some(game(
+                            "ps3",
+                            s.as_ref().and_then(|s| s.title()),
+                            s.as_ref().and_then(|s| s.string("TITLE_ID")),
+                            boot,
+                        ));
+                    }
+                }
+            }
+        }
+        // A loose Wii U game.
+        if let Some(p) = prefix_of(lower, "meta/meta.xml") {
+            let code = format!("{p}code/");
+            let mut rpx: Vec<&str> = names
+                .iter()
+                .filter(|(l, _)| {
+                    l.strip_prefix(&code)
+                        .map_or(false, |rest| !rest.contains('/') && rest.ends_with(".rpx"))
+                })
+                .map(|(_, n)| *n)
+                .collect();
+            rpx.sort();
+            if let Some(boot) = rpx.first() {
+                let xml = read(name, 1024 * 1024)
+                    .map(|b| String::from_utf8_lossy(&b).to_string())
+                    .unwrap_or_default();
+                return Some(game(
+                    "wiiu",
+                    xml_text(&xml, "longname_en").map(|t| tidy_title(&t)),
+                    xml_text(&xml, "product_code"),
+                    boot,
+                ));
+            }
+        }
+        // An extracted Xbox 360 disc.
+        if prefix_of(lower, "default.xex").is_some() {
+            return Some(game("xbox360", None, None, name));
+        }
+    }
+    None
 }
 
 /// How much a console game takes up on disk: the whole folder, or for a
@@ -728,6 +925,122 @@ pub(crate) mod tests {
         assert_eq!(for_boot_file(&save), None);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Build a zip from (name, bytes) pairs; a name ending in `/` is a folder.
+    pub(crate) fn zip_of(path: &Path, files: &[(&str, Vec<u8>)]) {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in files {
+            if name.ends_with('/') {
+                w.add_directory(*name, opts).unwrap();
+            } else {
+                w.start_file(*name, opts).unwrap();
+                w.write_all(bytes).unwrap();
+            }
+        }
+        w.finish().unwrap();
+    }
+
+    pub(crate) fn zipped_package(path: &Path) {
+        let base = "Skate 3/454108E6/00007000/";
+        let mut files = vec![
+            (base, Vec::new()),
+            ("Skate 3/454108E6/00007000/07A9631BB10EE556B1CE", package(0x7000, "Skate 3")),
+        ];
+        let data: Vec<String> = (0..3)
+            .map(|n| format!("{base}07A9631BB10EE556B1CE.data/Data000{n}"))
+            .collect();
+        for (n, name) in data.iter().enumerate() {
+            files.push((name.as_str(), vec![n as u8; 1000]));
+        }
+        zip_of(path, &files);
+    }
+
+    /// The case that prompted it: a Games on Demand package zipped up whole.
+    /// Nothing in it has an extension, so it used to be Unidentified.
+    #[test]
+    fn recognises_a_zipped_games_on_demand_package() {
+        let dir = scratch("zipgod");
+        let zip_path = dir.join("Skate 3.zip");
+        zipped_package(&zip_path);
+
+        let game = identify_archive(&zip_path).expect("a zipped package");
+        assert_eq!(game.platform, "xbox360");
+        assert_eq!(game.title.as_deref(), Some("Skate 3"));
+        assert_eq!(game.serial.as_deref(), Some("4D5307E6"));
+        assert_eq!(game.boot_entry, "Skate 3/454108E6/00007000/07A9631BB10EE556B1CE");
+        assert_eq!(game.size, 0xB000 + 3000, "everything, once unpacked");
+        // Launching needs only to know which file to start, from the names.
+        assert_eq!(archived_boot_entry(&zip_path).as_deref(), Some(game.boot_entry.as_str()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recognises_zipped_console_folders() {
+        let dir = scratch("zipfolders");
+
+        let ps3 = dir.join("Demon's Souls.zip");
+        zip_of(
+            &ps3,
+            &[
+                (
+                    "Demon's Souls (USA)/PS3_GAME/PARAM.SFO",
+                    sfo(&[("CATEGORY", "DG"), ("TITLE", "Demon's Souls"), ("TITLE_ID", "BLUS30443")]),
+                ),
+                ("Demon's Souls (USA)/PS3_GAME/USRDIR/EBOOT.BIN", b"SCE\0".to_vec()),
+                ("Demon's Souls (USA)/PS3_GAME/USRDIR/data.bin", vec![0; 100]),
+            ],
+        );
+        let game = identify_archive(&ps3).unwrap();
+        assert_eq!(game.platform, "ps3");
+        assert_eq!(game.title.as_deref(), Some("Demon's Souls"));
+        assert_eq!(game.boot_entry, "Demon's Souls (USA)/PS3_GAME/USRDIR/EBOOT.BIN");
+
+        // Zipped from inside the folder, so the layout starts at the top.
+        let ps4 = dir.join("Bloodborne.zip");
+        zip_of(
+            &ps4,
+            &[
+                (
+                    "sce_sys/param.sfo",
+                    sfo(&[("CATEGORY", "gd"), ("TITLE", "Bloodborne"), ("TITLE_ID", "CUSA00003")]),
+                ),
+                ("eboot.bin", vec![0; 10]),
+            ],
+        );
+        let game = identify_archive(&ps4).unwrap();
+        assert_eq!((game.platform, game.boot_entry.as_str()), ("ps4", "eboot.bin"));
+
+        let x360 = dir.join("Halo 3.zip");
+        zip_of(&x360, &[("Halo 3/default.xex", b"XEX2".to_vec()), ("Halo 3/media/a.bin", vec![0; 10])]);
+        assert_eq!(identify_archive(&x360).unwrap().platform, "xbox360");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A zipped cartridge ROM, or an update with nothing to start, is not a
+    /// console game and is left to the ordinary rules.
+    #[test]
+    fn an_ordinary_archive_is_not_a_console_game() {
+        let dir = scratch("zipplain");
+        let rom = dir.join("Super Metroid.zip");
+        zip_of(&rom, &[("Super Metroid (USA).sfc", vec![0; 1000])]);
+        assert_eq!(identify_archive(&rom), None);
+
+        let patch = dir.join("Demon's Souls update.zip");
+        zip_of(
+            &patch,
+            &[
+                ("BLUS30443/PARAM.SFO", sfo(&[("CATEGORY", "GD"), ("TITLE_ID", "BLUS30443")])),
+                ("BLUS30443/USRDIR/EBOOT.BIN", vec![0; 10]),
+            ],
+        );
+        assert_eq!(identify_archive(&patch), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

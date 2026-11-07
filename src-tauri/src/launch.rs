@@ -198,6 +198,13 @@ pub fn preview_rom_path(game: &Game, cache_root: &Path, accepts: Option<&[String
     if !needs_extracting(game, accepts) {
         return game.path.clone();
     }
+    let dir = cache_dir_for(game, cache_root);
+    if let Some(boot) = crate::consoles::archived_boot_entry(Path::new(&game.path)) {
+        return crate::hashing::safe_entry_path(&dir, &boot)
+            .unwrap_or(dir)
+            .to_string_lossy()
+            .to_string();
+    }
     let inner = game
         .inner_name
         .as_deref()
@@ -233,15 +240,89 @@ fn touch(dir: &Path) {
     let _ = std::fs::write(dir.join(".used"), b"");
 }
 
+/// Something told how far an unpacking has got: bytes so far, and in all.
+pub type Progress<'a> = &'a mut dyn FnMut(u64, u64);
+
 /// The path to hand the emulator, unpacking the ROM first if it has to be.
-pub fn playable_path(game: &Game, cache_root: &Path, accepts: Option<&[String]>) -> Result<String> {
+///
+/// A console game that is more than one file - an Xbox 360 package and its
+/// data, a PlayStation 3 folder - is unpacked whole, and the emulator handed
+/// the one file it starts from. Anything else is a single ROM, and only that
+/// entry is unpacked.
+pub fn playable_path(
+    game: &Game,
+    cache_root: &Path,
+    accepts: Option<&[String]>,
+    progress: Progress,
+) -> Result<String> {
     if !needs_extracting(game, accepts) {
         return Ok(game.path.clone());
     }
     let dir = cache_dir_for(game, cache_root);
+    if let Some(boot) = crate::consoles::archived_boot_entry(Path::new(&game.path)) {
+        unpack_whole(Path::new(&game.path), &dir, progress)?;
+        touch(&dir);
+        let file = crate::hashing::safe_entry_path(&dir, &boot)
+            .filter(|f| f.is_file())
+            .ok_or_else(|| AppError::Other(format!("{boot} was not in the archive after all")))?;
+        return Ok(file.to_string_lossy().to_string());
+    }
     let file = crate::hashing::extract_rom(Path::new(&game.path), &dir)?;
     touch(&dir);
     Ok(file.to_string_lossy().to_string())
+}
+
+/// Marks a cache folder as holding a whole archive, unpacked to the end.
+const COMPLETE: &str = ".complete";
+
+/// `path` with `.suffix` added, without treating a dot already in the name -
+/// `Vol. 2` - as the start of an extension to replace.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".");
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// Unpack a whole archive into `dir`, once.
+///
+/// It goes into a `.partial` folder that is renamed only when every file is
+/// out, so an unpack cut short - Playdex closed, the disk full - never leaves
+/// half a game that the next launch takes for a whole one.
+fn unpack_whole(archive: &Path, dir: &Path, progress: Progress) -> Result<()> {
+    if dir.join(COMPLETE).is_file() {
+        return Ok(());
+    }
+    let partial = with_suffix(dir, "partial");
+    let _ = std::fs::remove_dir_all(&partial);
+    crate::hashing::extract_all(archive, &partial, progress)?;
+    std::fs::write(partial.join(COMPLETE), b"")?;
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::rename(&partial, dir)?;
+    Ok(())
+}
+
+/// The one folder every file in an archive sits under, if there is one.
+fn common_top_folder(entries: &[(String, u64)]) -> Option<String> {
+    let mut top: Option<&str> = None;
+    for (name, _) in entries {
+        let normal = name.trim_start_matches(['/', '\\']);
+        let (first, rest) = normal.split_once(['/', '\\'])?;
+        if rest.is_empty() || top.is_some_and(|t| t != first) {
+            return None;
+        }
+        top = Some(first);
+    }
+    top.map(|t| t.to_string())
+}
+
+/// What unpacking an archive in place left behind.
+pub struct Unpacked {
+    /// The file the library entry now points at.
+    pub path: String,
+    pub filename: String,
+    pub size: u64,
+    pub message: String,
 }
 
 /// Replace a game's archive with the unpacked ROM inside it.
@@ -260,11 +341,7 @@ pub fn playable_path(game: &Game, cache_root: &Path, accepts: Option<&[String]>)
 ///
 /// This deletes something of yours, which nothing else in Playdex does. It
 /// only ever happens when asked for directly.
-pub fn unpack_in_place(
-    conn: &rusqlite::Connection,
-    game: &Game,
-    cache_root: &Path,
-) -> Result<String> {
+pub fn unpack_in_place(game: &Game, cache_root: &Path, progress: Progress) -> Result<Unpacked> {
     let archive = PathBuf::from(&game.path);
     let ext = archive
         .extension()
@@ -279,6 +356,9 @@ pub fn unpack_in_place(
     }
     if !archive.exists() {
         return Err(AppError::Other(format!("Missing: {}", game.path)));
+    }
+    if let Some(boot) = crate::consoles::archived_boot_entry(&archive) {
+        return unpack_folder_in_place(game, &archive, &boot, cache_root, progress);
     }
 
     // Unpack now if it has not been already.
@@ -322,17 +402,100 @@ pub fn unpack_in_place(
     std::fs::remove_file(&archive)?;
     let _ = std::fs::remove_dir_all(&dir);
 
-    let new_path = destination.to_string_lossy().to_string();
     let new_name = leaf.to_string_lossy().to_string();
-    conn.execute(
-        "UPDATE games SET path = ?2, filename = ?3, inner_name = NULL, size = ?4
-         WHERE id = ?1",
-        rusqlite::params![game.id, new_path, new_name, size as i64],
-    )?;
+    Ok(Unpacked {
+        path: destination.to_string_lossy().to_string(),
+        message: format!(
+            "Unpacked to {new_name} and deleted the archive. The hashes are unchanged, since they were always of the ROM inside."
+        ),
+        filename: new_name,
+        size,
+    })
+}
 
-    Ok(format!(
-        "Unpacked to {new_name} and deleted the archive. The hashes are unchanged, since they were always of the ROM inside."
-    ))
+/// Replace an archived console game with the folder inside it.
+///
+/// The same order as for a single ROM: everything is put in place and
+/// checked, and the archive is deleted last. An archive that holds one
+/// folder unpacks as that folder beside it; one holding loose files gets a
+/// folder of its own, named after the archive, rather than spilling them
+/// across the folder it sat in. A copy a launch already unpacked into the
+/// cache is moved rather than unpacked a second time.
+fn unpack_folder_in_place(
+    game: &Game,
+    archive: &Path,
+    boot: &str,
+    cache_root: &Path,
+    progress: Progress,
+) -> Result<Unpacked> {
+    let entries = crate::hashing::archive_entries(archive)?;
+    let total: u64 = entries.iter().map(|(_, size)| size).sum();
+    let parent = archive
+        .parent()
+        .ok_or_else(|| AppError::Other("The archive has no folder".into()))?;
+    let top = common_top_folder(&entries);
+    let (base, folder) = match &top {
+        Some(t) => (parent.to_path_buf(), parent.join(t)),
+        None => {
+            let stem = archive.file_stem().unwrap_or_default();
+            (parent.join(stem), parent.join(stem))
+        }
+    };
+    if folder.exists() {
+        return Err(AppError::Other(format!(
+            "{} is already there. Nothing was changed.",
+            folder.display()
+        )));
+    }
+
+    // The archive's own layout is laid out first, then moved into place: the
+    // copy in the cache if a launch already unpacked it in full, or else a
+    // working folder beside the archive, so the last step is a rename on the
+    // same drive.
+    let cached = cache_dir_for(game, cache_root);
+    let pick = |root: &Path| match &top {
+        Some(t) => root.join(t),
+        None => root.to_path_buf(),
+    };
+    let moved = cached.join(COMPLETE).is_file() && std::fs::rename(pick(&cached), &folder).is_ok();
+    let work = parent.join(format!(".playdex-unpacking-{}", game.id));
+    if !moved {
+        let _ = std::fs::remove_dir_all(&work);
+        crate::hashing::extract_all(archive, &work, progress)?;
+        if let Err(e) = std::fs::rename(pick(&work), &folder) {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(e.into());
+        }
+    }
+    // The cache's own markers do not belong in a game's folder.
+    let _ = std::fs::remove_file(folder.join(COMPLETE));
+    let _ = std::fs::remove_file(folder.join(".used"));
+
+    // Refuse to go further unless every byte arrived.
+    let boot_file = crate::hashing::safe_entry_path(&base, boot).filter(|f| f.is_file());
+    let arrived = dir_size(&folder);
+    let Some(boot_file) = boot_file.filter(|_| arrived == total) else {
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(AppError::Other(
+            "The unpacked game did not arrive whole, so the archive was left alone.".into(),
+        ));
+    };
+
+    // Only now is there a spare copy to lose.
+    std::fs::remove_file(archive)?;
+    let _ = std::fs::remove_dir_all(&work);
+    let _ = std::fs::remove_dir_all(&cached);
+
+    let filename = crate::consoles::for_boot_file(&boot_file)
+        .map(|g| g.name())
+        .unwrap_or_else(|| folder.file_name().unwrap_or_default().to_string_lossy().to_string());
+    Ok(Unpacked {
+        path: boot_file.to_string_lossy().to_string(),
+        message: format!("Unpacked to {} and deleted the archive.", folder.display()),
+        filename,
+        size: total,
+    })
 }
 
 /// What the unpacked-ROM cache is costing, for somewhere to show it.
@@ -374,7 +537,11 @@ pub fn clear_cache(cache_root: &Path) -> Result<u64> {
 }
 
 /// Delete least-recently-used entries until the cache fits within `limit`.
-pub fn prune_cache(cache_root: &Path, limit: u64) -> Result<u64> {
+///
+/// `keep` is never deleted, however far over the limit it alone puts the
+/// cache: it is the game about to start, and evicting it would hand the
+/// emulator a path to nothing.
+pub fn prune_cache(cache_root: &Path, limit: u64, keep: Option<&Path>) -> Result<u64> {
     let root = cache_root.join("extracted");
     let Ok(dirs) = std::fs::read_dir(&root) else {
         return Ok(0);
@@ -404,6 +571,9 @@ pub fn prune_cache(cache_root: &Path, limit: u64) -> Result<u64> {
     for (_, size, path) in entries {
         if total <= limit {
             break;
+        }
+        if keep.is_some_and(|k| k.starts_with(&path)) {
+            continue;
         }
         if std::fs::remove_dir_all(&path).is_ok() {
             total = total.saturating_sub(size);
@@ -504,6 +674,32 @@ pub fn build_command(
     ))
 }
 
+/// Games being got ready to play: unpacked, or about to be.
+static PREPARING: std::sync::LazyLock<Mutex<std::collections::HashSet<i64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+/// Holds a game's place while it is got ready, so asking twice does not
+/// unpack the same several gigabytes twice over.
+struct Preparing(i64);
+
+impl Preparing {
+    fn claim(game: &Game) -> Result<Self> {
+        if !PREPARING.lock().unwrap().insert(game.id) {
+            return Err(AppError::Other(format!(
+                "{} is already being got ready to play.",
+                game.title
+            )));
+        }
+        Ok(Preparing(game.id))
+    }
+}
+
+impl Drop for Preparing {
+    fn drop(&mut self) {
+        PREPARING.lock().unwrap().remove(&self.0);
+    }
+}
+
 /// Start a game and record the session when it exits.
 pub fn launch(
     app: &AppHandle,
@@ -515,7 +711,7 @@ pub fn launch(
         return Err(AppError::Other(format!("ROM is missing: {}", game.path)));
     }
 
-    let (exe, args) = {
+    let (accepts, limit) = {
         let guard = conn.lock().unwrap();
 
         // Check the emulator is actually set up before unpacking anything.
@@ -536,11 +732,41 @@ pub fn launch(
                 let core = resolve_for_game(&guard, game).core?;
                 core_extensions(Path::new(&p), &core)
             });
-        let rom = playable_path(game, cache_root, accepts.as_deref())?;
-        // Trim afterwards, so a game is never evicted to make room for itself.
-        // Untidy is not a reason to refuse to start something, so best effort.
-        let _ = prune_cache(cache_root, cache_limit(&guard));
+        (accepts, cache_limit(&guard))
+    };
 
+    // Unpacking a disc or a package can take minutes, so it happens with the
+    // library unlocked - everything else keeps working meanwhile - and says
+    // how far it has got.
+    let _preparing = Preparing::claim(game)?;
+    let rom = {
+        let mut last = std::time::Instant::now();
+        let mut report = |done: u64, total: u64| {
+            if done < total && last.elapsed() < std::time::Duration::from_millis(200) {
+                return;
+            }
+            last = std::time::Instant::now();
+            let _ = app.emit(
+                "unpack-progress",
+                serde_json::json!({
+                    "gameId": game.id, "title": game.title,
+                    "done": done, "total": total, "finished": false,
+                }),
+            );
+        };
+        let rom = playable_path(game, cache_root, accepts.as_deref(), &mut report);
+        let _ = app.emit(
+            "unpack-progress",
+            serde_json::json!({ "gameId": game.id, "title": game.title, "finished": true }),
+        );
+        rom?
+    };
+    // Trim afterwards, so a game is never evicted to make room for itself.
+    // Untidy is not a reason to refuse to start something, so best effort.
+    let _ = prune_cache(cache_root, limit, Some(Path::new(&rom)));
+
+    let (exe, args) = {
+        let guard = conn.lock().unwrap();
         let command = build_command(&guard, game, &rom)?;
 
         // Put any switched-on cheats where RetroArch will find them, now,
@@ -854,6 +1080,160 @@ mod tests {
         assert!(needs_extracting(&nes, None));
     }
 
+    fn archived_package(dir: &Path) -> Game {
+        let zip = dir.join("Skate 3.zip");
+        crate::consoles::tests::zipped_package(&zip);
+        Game {
+            id: 7,
+            path: zip.to_string_lossy().to_string(),
+            filename: "Skate 3.zip".into(),
+            platform: "xbox360".into(),
+            title: "Skate 3".into(),
+            ..Default::default()
+        }
+    }
+
+    const HEADER: &str = "07A9631BB10EE556B1CE";
+
+    /// A Games on Demand package is a header and a folder of data. Handing
+    /// Xenia the header alone, which is all the single-file rule unpacked,
+    /// is handing it half a game.
+    #[test]
+    fn unpacks_a_zipped_package_whole_and_starts_its_header() {
+        let dir = tmp("wholezip");
+        let cache = dir.join("cache");
+        let game = archived_package(&dir);
+
+        let mut reports = 0;
+        let out = playable_path(&game, &cache, None, &mut |_, _| reports += 1).unwrap();
+        let header = PathBuf::from(&out);
+        assert_eq!(header.file_name().unwrap(), HEADER);
+        assert!(header.is_file());
+        let data = header.with_file_name(format!("{HEADER}.data"));
+        assert_eq!(std::fs::read_dir(&data).unwrap().count(), 3, "all its data came too");
+        assert!(reports > 0, "progress was reported");
+
+        // The preview names the same file without unpacking anything.
+        assert_eq!(preview_rom_path(&game, &cache, None), out);
+
+        // Unpacked once: the second launch reads nothing from the archive.
+        let mut again = 0;
+        assert_eq!(playable_path(&game, &cache, None, &mut |_, _| again += 1).unwrap(), out);
+        assert_eq!(again, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Half an unpack, left by Playdex closing partway, is not taken for a
+    /// whole one.
+    #[test]
+    fn an_unpack_cut_short_is_done_again() {
+        let dir = tmp("partialzip");
+        let cache = dir.join("cache");
+        let game = archived_package(&dir);
+        let target = cache_dir_for(&game, &cache);
+        std::fs::create_dir_all(with_suffix(&target, "partial")).unwrap();
+
+        let out = playable_path(&game, &cache, None, &mut |_, _| {}).unwrap();
+        assert!(Path::new(&out).is_file());
+        assert!(!with_suffix(&target, "partial").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unpacks_a_zipped_package_in_place_and_deletes_the_zip() {
+        let dir = tmp("inplacezip");
+        let cache = dir.join("cache");
+        let game = archived_package(&dir);
+
+        let done = unpack_in_place(&game, &cache, &mut |_, _| {}).unwrap();
+        let header = PathBuf::from(&done.path);
+        // The zip held one folder, so that folder is what appears beside it.
+        assert_eq!(header, dir.join("Skate 3").join("454108E6").join("00007000").join(HEADER));
+        assert!(header.is_file());
+        assert!(!dir.join("Skate 3.zip").exists(), "the zip goes last, once all is in place");
+        assert_eq!(done.filename, "Skate 3", "named from the package's header");
+        assert_eq!(done.size, 0xB000 + 3000);
+        assert!(!dir.join(format!(".playdex-unpacking-{}", game.id)).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Played once already, so the cache holds the whole game: it is moved,
+    /// not unpacked a second time, and none of the cache's markers come too.
+    #[test]
+    fn unpacking_in_place_moves_what_a_launch_already_unpacked() {
+        let dir = tmp("inplacecached");
+        let cache = dir.join("cache");
+        let game = archived_package(&dir);
+        playable_path(&game, &cache, None, &mut |_, _| {}).unwrap();
+
+        let mut read_again = false;
+        let done = unpack_in_place(&game, &cache, &mut |_, _| read_again = true).unwrap();
+        assert!(!read_again, "moved rather than unpacked again");
+        assert!(Path::new(&done.path).is_file());
+        assert!(!cache_dir_for(&game, &cache).exists());
+        assert!(!dir.join("Skate 3").join(COMPLETE).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Loose files get a folder of their own rather than spilling out.
+    #[test]
+    fn an_archive_of_loose_files_unpacks_into_a_folder_named_after_it() {
+        let dir = tmp("inplaceloose");
+        let zip = dir.join("Bloodborne.zip");
+        crate::consoles::tests::zip_of(
+            &zip,
+            &[
+                (
+                    "sce_sys/param.sfo",
+                    crate::consoles::tests::sfo(&[("CATEGORY", "gd"), ("TITLE", "Bloodborne"), ("TITLE_ID", "CUSA00003")]),
+                ),
+                ("eboot.bin", vec![1; 64]),
+            ],
+        );
+        let game = Game {
+            id: 8,
+            path: zip.to_string_lossy().to_string(),
+            platform: "ps4".into(),
+            ..Default::default()
+        };
+        let done = unpack_in_place(&game, &dir.join("cache"), &mut |_, _| {}).unwrap();
+        assert_eq!(PathBuf::from(&done.path), dir.join("Bloodborne").join("eboot.bin"));
+        assert_eq!(done.filename, "Bloodborne");
+
+        // A second archive that would land on the same folder is refused,
+        // and left where it is.
+        let zip2 = dir.join("Bloodborne.zip");
+        crate::consoles::tests::zip_of(&zip2, &[("eboot.bin", vec![1; 64]), ("sce_sys/param.sfo", vec![0; 8])]);
+        let game2 = Game { path: zip2.to_string_lossy().to_string(), ..game };
+        assert!(unpack_in_place(&game2, &dir.join("cache"), &mut |_, _| {}).is_err());
+        assert!(zip2.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A game larger than the whole cache limit is still not evicted to make
+    /// room for itself, moments before the emulator opens it.
+    #[test]
+    fn pruning_never_takes_the_game_about_to_start() {
+        let dir = tmp("prunekeep");
+        let root = dir.join("extracted");
+        for name in ["older", "playing"] {
+            let entry = root.join(name);
+            std::fs::create_dir_all(&entry).unwrap();
+            std::fs::write(entry.join("rom.bin"), vec![0u8; 8192]).unwrap();
+            touch(&entry);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        let rom = root.join("playing").join("rom.bin");
+        prune_cache(&dir, 1024, Some(&rom)).unwrap();
+        assert!(rom.exists());
+        assert!(!root.join("older").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The cache is capped, and the least recently used entry goes first.
     #[test]
     fn prunes_the_oldest_entries_when_over_the_limit() {
@@ -874,14 +1254,14 @@ mod tests {
         assert!(before >= 12 * 1024);
 
         // Room for two of them.
-        let freed = prune_cache(&dir, 9 * 1024).unwrap();
+        let freed = prune_cache(&dir, 9 * 1024, None).unwrap();
         assert!(freed > 0);
 
         assert!(!root.join("oldest").exists(), "the oldest should have gone");
         assert!(root.join("newest").exists(), "the newest should have stayed");
 
         // Under the limit already: nothing is touched.
-        assert_eq!(prune_cache(&dir, 100 * 1024).unwrap(), 0);
+        assert_eq!(prune_cache(&dir, 100 * 1024, None).unwrap(), 0);
 
         // And clearing takes the lot.
         clear_cache(&dir).unwrap();
@@ -912,7 +1292,7 @@ mod tests {
         let game = game_at(&archive, Some("New Super Mario Bros Wii [SMNE01].wbfs"));
         let dolphin: Vec<String> = ["wbfs", "iso"].iter().map(|s| s.to_string()).collect();
 
-        let out = playable_path(&game, &cache, Some(&dolphin)).unwrap();
+        let out = playable_path(&game, &cache, Some(&dolphin), &mut |_, _| {}).unwrap();
         assert!(out.ends_with(".wbfs"), "got {out}");
         assert_eq!(std::fs::read(&out).unwrap(), payload);
 
@@ -920,7 +1300,7 @@ mod tests {
         assert_eq!(preview_rom_path(&game, &cache, Some(&dolphin)), out);
 
         // Unpacking again is free: the file is already the right size.
-        let again = playable_path(&game, &cache, Some(&dolphin)).unwrap();
+        let again = playable_path(&game, &cache, Some(&dolphin), &mut |_, _| {}).unwrap();
         assert_eq!(again, out);
 
         // Nothing is left behind half-written.

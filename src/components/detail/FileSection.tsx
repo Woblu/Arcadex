@@ -28,9 +28,10 @@ export default function FileSection({ game, onChanged }: Props) {
   // Playdex cannot open one in the first place.
   const isArchived = /\.(zip|7z)$/i.test(game.path);
   // A console game kept as a folder is listed under the folder's name and
-  // launched from the file inside it, so the two names differ. There is no
-  // one file to checksum.
-  const isFolderGame = fileName !== game.filename;
+  // launched from the file inside it, so the two names differ. One zipped up
+  // whole carries the serial it was named from. Either way there is no one
+  // file to checksum.
+  const isFolderGame = fileName !== game.filename || (isArchived && game.serial !== null);
 
   const runChecksum = async () => {
     setChecking(true);
@@ -95,6 +96,9 @@ export default function FileSection({ game, onChanged }: Props) {
         </div>
       )}
       {checkNote && <div className="hint">{checkNote}</div>}
+      {/* Once unpacked, the game is no longer an archive and the box below
+          goes, so what happened is said here instead of vanishing with it. */}
+      {unpackNote && !isArchived && <div className="notice">{unpackNote}</div>}
 
       {isArchived && (
         <div className="unpack-box">
@@ -103,10 +107,10 @@ export default function FileSection({ game, onChanged }: Props) {
           ) : confirmUnpack ? (
             <>
               <div className="hint">
-                This deletes <strong>{fileName}</strong> and keeps the ROM
+                This deletes <strong>{fileName}</strong> and keeps what is
                 inside it, in the same folder. One copy instead of two. It
                 cannot be undone, and the archive is only removed once the
-                unpacked ROM is safely in place.
+                unpacked game is safely in place.
               </div>
               <div className="row" style={{ marginTop: 8 }}>
                 <button
@@ -147,7 +151,7 @@ export default function FileSection({ game, onChanged }: Props) {
                 style={{ marginTop: 8 }}
                 onClick={() => setConfirmUnpack(true)}
               >
-                Unpack and keep only the ROM
+                Unpack and keep only the game
               </button>
             </>
           )}

@@ -41,6 +41,14 @@ Existing entries are normally left alone. Two exceptions:
   heuristic cleans up after itself. The file on disk is never touched. Anything
   you've played, favourited, patched or used as a hack's base game is exempt.
 
+A file dropped onto the window usually lives outside every library folder, so
+walking the folders never reaches it. A scan looks at those again as well, so
+a game added that way before a rule was fixed is put right like the rest.
+
+An archive too large to hash still records which file inside it is the game.
+Without that it looked unopened to every scan after, and was read again and
+reported as corrected each time.
+
 ### Adding games
 
 Drag a ROM onto the window and it joins the library. The whole window is the
@@ -132,6 +140,14 @@ Switch dumps (`.nsp`, `.xci`, `.nsz`, `.xcz`) and Wii U single files (`.wua`,
 
 Multi-disc games on these systems are not folded into an `.m3u`. Their
 emulators do not read one, and Xenia swaps an Xbox 360 game's discs itself.
+
+**Kept in a zip or 7z.** Any of these layouts archived whole is recognised
+from the archive's list of names - a package file in its `00007000` folder, a
+`PS3_GAME` folder, `sce_sys` beside `eboot.bin` - and named from the one small
+file inside that says what it is, without unpacking the rest. A zipped Games on
+Demand package is a 45 KB header and several gigabytes of data, and only the
+header is read. The entry keeps the archive as its file, with the size of
+everything inside it. Playing one unpacks the whole archive (see Launching).
 
 **Not covered.** No emulator runs Xbox One games, so there is nothing to
 point one at. PlayStation 5 emulation is at an early stage and runs a small
@@ -381,21 +397,39 @@ because RetroArch opens it itself. With no core to ask (a standalone emulator, o
 a RetroArch that cannot be found) the ROM is unpacked, since a real file always
 works.
 
+A console game that is more than one file - an Xbox 360 package and its data,
+a PlayStation 3 folder - is unpacked whole, since the one entry that looks most
+like a ROM is only part of the game, and the emulator is handed the file it
+starts from. It goes into a `.partial` folder renamed only once every file is
+out, so an unpack cut short is never taken for a finished one.
+
+Unpacking happens off the main thread and with the library unlocked, so the
+window keeps working for the minute or two a disc or a package takes, and a
+card shows how far it has got. The game starts when it is done.
+
 Unpacked ROMs are keyed by the archive's checksum and reused, so this costs one
 extraction rather than one per launch. **Settings → Emulators** shows what the
 cache is using, sets its size limit (64 GB by default, since one disc game can
 be most of a small limit on its own) and can empty it. Past the limit the game
 you have not played in longest is dropped. The originals are never touched, and
-anything cleared is rebuilt on the next launch.
+anything cleared is rebuilt on the next launch. The game about to start is
+never evicted, even when it alone is larger than the limit.
 
 Keeping both copies is the price of storing a disc game compressed, so a game's
-detail panel offers to collapse them: **Unpack and keep only the ROM** moves the
+detail panel offers to collapse them: **Unpack and keep only the game** moves the
 unpacked file out of the cache into the folder the archive lived in, repoints
 the library entry, and then deletes the archive. That order is the design — the
 replacement is in place and checked before anything is removed, and moving it
 out of the cache puts it beyond the reach of eviction, which would otherwise be
 free to delete the only remaining copy. It is the one thing in Playdex that
 deletes a file of yours, and it only happens when asked for directly.
+
+For an archived console game it keeps the whole game rather than one file. An
+archive holding one folder unpacks as that folder beside it; one holding loose
+files gets a folder named after the archive, rather than spilling them into the
+folder it sat in. If a launch already unpacked it, the copy in the cache is
+moved instead of unpacked a second time. Every byte is checked to have arrived
+before the archive is deleted.
 
 ### Cheats
 
@@ -667,7 +701,9 @@ quotes Explorer's "Copy as path" adds, both on save and on use.
 
 **Find emulators** does the same for standalone emulators. It looks in the
 places people unzip them - a folder called Emulators on any drive, the drive
-roots, Program Files, Downloads, Scoop, EmuDeck and ES-DE on Windows; the
+roots, Program Files, Downloads, Scoop, EmuDeck and ES-DE on Windows, and the
+Desktop, Documents and Downloads wherever the system says they are, which with
+OneDrive backup on is inside OneDrive rather than the user folder; the
 Applications folders on macOS; package paths, Flatpak exports and AppImages in
 `~/Applications` on Linux - and recognises each by its executable's name. A
 system you have games for that can only run on a standalone emulator, and has
@@ -826,7 +862,7 @@ you.
 ## Notes
 
 - Removing a game removes the library entry only. The file on disk is never
-  touched. The single exception is **Unpack and keep only the ROM**, which
+  touched. The single exception is **Unpack and keep only the game**, which
   deletes an archive after replacing it with the ROM from inside, and says so
   before it does.
 - The library lives in the app data directory next to the artwork cache, so

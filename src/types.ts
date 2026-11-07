@@ -99,6 +99,15 @@ export interface ScanProgress {
   done: boolean;
 }
 
+/** How far a game has got being unpacked before it starts. */
+export interface UnpackProgress {
+  gameId: number;
+  title: string;
+  done?: number;
+  total?: number;
+  finished: boolean;
+}
+
 export interface ScrapeProgress {
   current: number;
   total: number;

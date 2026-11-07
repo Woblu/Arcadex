@@ -1,9 +1,11 @@
-import type { ScanProgress, ScrapeProgress } from "../types";
+import type { ScanProgress, ScrapeProgress, UnpackProgress } from "../types";
+import { formatBytes } from "../update";
 
 interface Props {
   scan: ScanProgress | null;
   scrape: ScrapeProgress | null;
   nowPlaying: string | null;
+  unpacking: UnpackProgress | null;
   onCancelScrape: () => void;
 }
 
@@ -11,6 +13,7 @@ export default function ProgressToast({
   scan,
   scrape,
   nowPlaying,
+  unpacking,
   onCancelScrape,
 }: Props) {
   if (nowPlaying) {
@@ -22,6 +25,32 @@ export default function ProgressToast({
         </div>
         <div className="hint">
           Playtime is recorded when the emulator closes.
+        </div>
+      </div>
+    );
+  }
+
+  // Unpacking a disc or a console package before it starts is the slow
+  // part of pressing Play, and the only sign anything is happening.
+  if (unpacking) {
+    const total = unpacking.total ?? 0;
+    const done = unpacking.done ?? 0;
+    return (
+      <div className="toast">
+        <div className="toast-head">
+          <strong>Unpacking</strong>
+          <span className="toast-msg">{unpacking.title}</span>
+          {total > 0 && (
+            <span className="card-sub">
+              {formatBytes(done)} of {formatBytes(total)}
+            </span>
+          )}
+        </div>
+        <div className="bar">
+          <div className="bar-fill" style={{ width: `${total > 0 ? (done / total) * 100 : 0}%` }} />
+        </div>
+        <div className="hint" style={{ marginTop: 8 }}>
+          Only the first time. The game starts when it is done.
         </div>
       </div>
     );

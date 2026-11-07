@@ -281,6 +281,27 @@ fn places() -> Vec<(PathBuf, usize)> {
             }
             out.push((home.join("scoop").join("apps"), 2));
         }
+        // With OneDrive backing up the Desktop and Documents, those are not
+        // the folders of the same name in the user profile at all but ones
+        // inside OneDrive, and an emulator unzipped onto the Desktop was
+        // never found. OneDrive's own root is worth a look as well.
+        for key in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+            if let Some(root) = env(key) {
+                out.push((root.clone(), 1));
+                for sub in ["Desktop", "Documents", "Emulators"] {
+                    out.push((root.join(sub), if sub == "Emulators" { 2 } else { 1 }));
+                }
+            }
+        }
+    }
+
+    // Where the system itself says the Desktop, Documents and Downloads are,
+    // which follows them wherever they have been moved to.
+    for dir in [dirs::desktop_dir(), dirs::document_dir(), dirs::download_dir()]
+        .into_iter()
+        .flatten()
+    {
+        out.push((dir, 1));
     }
 
     #[cfg(target_os = "macos")]
@@ -452,6 +473,15 @@ mod tests {
         assert!(found[0].command.contains("--no-gui"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The Desktop the system reports is searched, wherever it really is -
+    /// inside OneDrive, on this machine, which is where Xenia was missed.
+    #[test]
+    fn looks_on_the_real_desktop() {
+        if let Some(desktop) = dirs::desktop_dir() {
+            assert!(places().iter().any(|(p, _)| *p == desktop), "{}", desktop.display());
+        }
     }
 
     #[test]

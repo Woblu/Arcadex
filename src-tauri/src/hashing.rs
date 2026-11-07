@@ -321,6 +321,181 @@ pub fn extract_rom(path: &Path, dest_dir: &Path) -> Result<PathBuf> {
     Ok(dest)
 }
 
+/// Names and uncompressed sizes of every file in a zip or 7z.
+pub fn archive_entries(path: &Path) -> Result<Vec<(String, u64)>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "7z" {
+        let archive = sevenz_rust2::Archive::open(path)?;
+        return Ok(sevenz_entries(&archive));
+    }
+    let f = File::open(path)?;
+    let mut archive = zip::ZipArchive::new(BufReader::new(f))?;
+    zip_entries(&mut archive)
+}
+
+/// The entry that is the ROM, chosen the way hashing chooses it, without
+/// reading any of it.
+///
+/// For an archive too large to hash. Without this the library never learnt
+/// which file inside was the game, so the entry looked unopened to every
+/// scan after and was re-read and reported as corrected each time.
+pub fn archive_rom_entry(path: &Path) -> Option<String> {
+    pick_entry(archive_entries(path).ok()?.into_iter()).map(|(name, _)| name)
+}
+
+/// The first `limit` bytes of one entry, for reading a small file that
+/// describes a game - a PARAM.SFO, a package header - out of an archive
+/// without unpacking the rest.
+pub fn read_archive_entry(path: &Path, name: &str, limit: u64) -> Result<Vec<u8>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mut buf = Vec::new();
+    if ext == "7z" {
+        read_7z_entry(path, name, |rd| {
+            rd.take(limit).read_to_end(&mut buf)?;
+            Ok(())
+        })?;
+    } else {
+        let f = File::open(path)?;
+        let mut archive = zip::ZipArchive::new(BufReader::new(f))?;
+        let entry = archive.by_name(name)?;
+        entry.take(limit).read_to_end(&mut buf)?;
+    }
+    Ok(buf)
+}
+
+/// Where an entry lands under `dest`, or `None` for a name that would land
+/// somewhere else: a `..` that climbs out, or a drive letter.
+pub(crate) fn safe_entry_path(dest: &Path, name: &str) -> Option<PathBuf> {
+    let mut out = dest.to_path_buf();
+    for part in name.split(['/', '\\']) {
+        match part {
+            "" | "." => continue,
+            ".." => return None,
+            p if p.contains(':') => return None,
+            p => out.push(p),
+        }
+    }
+    (out != dest).then_some(out)
+}
+
+/// Copy one entry out, reporting how far through the whole archive the
+/// unpacking has got every few megabytes.
+fn copy_counting(
+    src: &mut dyn Read,
+    dst: &mut dyn std::io::Write,
+    done: &mut u64,
+    total: u64,
+    progress: &mut dyn FnMut(u64, u64),
+) -> std::io::Result<()> {
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut since = 0u64;
+    loop {
+        let n = src.read(&mut buf)?;
+        if n == 0 {
+            return Ok(());
+        }
+        dst.write_all(&buf[..n])?;
+        *done += n as u64;
+        since += n as u64;
+        if since >= 16 * 1024 * 1024 {
+            since = 0;
+            progress(*done, total);
+        }
+    }
+}
+
+/// Unpack everything in an archive under `dest`, keeping its folders.
+///
+/// For a game that is more than one file - an Xbox 360 package and its data,
+/// a PlayStation 3 folder - where unpacking only the entry that looks most
+/// like a ROM leaves the emulator with half a game. An archive holding a name
+/// that would land outside `dest` is refused whole rather than partly
+/// unpacked. `progress` hears the bytes written so far and the total.
+pub fn extract_all(path: &Path, dest: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let total: u64 = archive_entries(path)?.iter().map(|(_, size)| size).sum();
+    let mut done = 0u64;
+    let escapes = |name: &str| {
+        crate::error::AppError::Other(format!(
+            "The archive holds {name}, which would land outside the folder it is unpacked to, so nothing was unpacked."
+        ))
+    };
+    std::fs::create_dir_all(dest)?;
+
+    match ext.as_str() {
+        "zip" => {
+            let f = File::open(path)?;
+            let mut archive = zip::ZipArchive::new(BufReader::new(f))?;
+            // Every name is checked before anything is written.
+            for i in 0..archive.len() {
+                let entry = archive.by_index(i)?;
+                if safe_entry_path(dest, entry.name()).is_none() && !entry.name().trim_matches('/').is_empty() {
+                    return Err(escapes(entry.name()));
+                }
+            }
+            for i in 0..archive.len() {
+                let mut entry = archive.by_index(i)?;
+                let Some(target) = safe_entry_path(dest, entry.name()) else { continue };
+                if entry.is_dir() {
+                    std::fs::create_dir_all(&target)?;
+                    continue;
+                }
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut out = std::io::BufWriter::new(File::create(&target)?);
+                copy_counting(&mut entry, &mut out, &mut done, total, progress)?;
+            }
+        }
+        "7z" => {
+            let archive = sevenz_rust2::Archive::open(path)?;
+            if let Some(bad) = archive
+                .files
+                .iter()
+                .find(|f| safe_entry_path(dest, &f.name).is_none() && !f.name.trim_matches('/').is_empty())
+            {
+                return Err(escapes(&bad.name));
+            }
+            let mut reader = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty())?;
+            reader.for_each_entries(|entry, rd| {
+                let Some(target) = safe_entry_path(dest, entry.name()) else {
+                    return Ok(true);
+                };
+                if entry.is_directory() {
+                    std::fs::create_dir_all(&target)?;
+                    return Ok(true);
+                }
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut out = std::io::BufWriter::new(File::create(&target)?);
+                copy_counting(rd, &mut out, &mut done, total, progress)?;
+                Ok(true)
+            })?;
+        }
+        _ => {
+            return Err(crate::error::AppError::Other(format!(
+                "{} is not an archive Playdex can unpack",
+                path.display()
+            )))
+        }
+    }
+    progress(total, total);
+    Ok(())
+}
+
 /// The names inside an archive, used for platform detection.
 pub fn archive_entry_names(path: &Path) -> Result<Vec<String>> {
     let ext = path
@@ -337,6 +512,40 @@ pub fn archive_entry_names(path: &Path) -> Result<Vec<String>> {
     let f = File::open(path)?;
     let mut archive = zip::ZipArchive::new(BufReader::new(f))?;
     Ok(zip_entries(&mut archive)?.into_iter().map(|(n, _)| n).collect())
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    /// A name that climbs out of the folder it is unpacked to - a zip-slip -
+    /// stops the whole unpack before anything is written.
+    #[test]
+    fn refuses_an_archive_that_would_write_outside_its_folder() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("playdex-slip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip = dir.join("evil.zip");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&zip).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            w.start_file("game/ok.bin", opts).unwrap();
+            w.write_all(b"fine").unwrap();
+            w.start_file("../escaped.txt", opts).unwrap();
+            w.write_all(b"nope").unwrap();
+            w.finish().unwrap();
+        }
+        let dest = dir.join("out");
+        assert!(extract_all(&zip, &dest, &mut |_, _| {}).is_err());
+        assert!(!dir.join("escaped.txt").exists());
+        assert!(!dest.join("game").join("ok.bin").exists(), "nothing at all was written");
+
+        assert_eq!(safe_entry_path(&dest, "a/../../b"), None);
+        assert_eq!(safe_entry_path(&dest, "C:/Windows/x"), None);
+        assert_eq!(safe_entry_path(&dest, "a\\b"), Some(dest.join("a").join("b")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

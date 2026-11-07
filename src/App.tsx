@@ -11,6 +11,7 @@ import type {
   ScanProgress,
   ScrapeProgress,
   SortKey,
+  UnpackProgress,
 } from "./types";
 
 import GameDetail from "./components/GameDetail";
@@ -96,6 +97,8 @@ export default function App() {
   const [scan, setScan] = useState<ScanProgress | null>(null);
   const [scrape, setScrape] = useState<ScrapeProgress | null>(null);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
+  /** A game being unpacked before it starts, which can take minutes. */
+  const [unpacking, setUnpacking] = useState<UnpackProgress | null>(null);
 
   const hideTimer = useRef<number | null>(null);
 
@@ -195,6 +198,9 @@ export default function App() {
           void refreshSidebar();
           scheduleHide(() => setScrape(null));
         }
+      }),
+      listen<UnpackProgress>("unpack-progress", (e) => {
+        setUnpacking(e.payload.finished ? null : e.payload);
       }),
       listen<{ title: string }>("game-launched", (e) => {
         setNowPlaying(e.payload.title);
@@ -614,11 +620,12 @@ export default function App() {
         <UpdateBanner info={update} onDismiss={() => setUpdateDismissed(true)} />
       )}
 
-      {(scan || scrape || nowPlaying) && (
+      {(scan || scrape || nowPlaying || unpacking) && (
         <ProgressToast
           scan={scan}
           scrape={scrape}
           nowPlaying={nowPlaying}
+          unpacking={unpacking}
           onCancelScrape={() => void api.cancelScrape()}
         />
       )}

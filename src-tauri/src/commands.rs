@@ -468,14 +468,22 @@ pub async fn scrape_one(app: AppHandle, id: i64) -> Result<String> {
 
 // -------------------------------------------------------------- launch
 
+/// Off the main thread: a game kept in an archive is unpacked before it
+/// starts, which for a disc or a console package is minutes of work, and a
+/// command run on the main thread holds the whole window still until it ends.
 #[tauri::command]
-pub fn launch_game(app: AppHandle, db: State<Db>, id: i64) -> Result<()> {
-    let game = {
-        let conn = db.0.lock().unwrap();
-        db::get_game(&conn, id)?.ok_or_else(|| AppError::Other("Game not found".into()))?
-    };
-    let cache_root = app.state::<AppState>().media_root.clone();
-    launch::launch(&app, &db.0, &game, &cache_root)
+pub async fn launch_game(app: AppHandle, id: i64) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db = app.state::<Db>();
+        let game = {
+            let conn = db.0.lock().unwrap();
+            db::get_game(&conn, id)?.ok_or_else(|| AppError::Other("Game not found".into()))?
+        };
+        let cache_root = app.state::<AppState>().media_root.clone();
+        launch::launch(&app, &db.0, &game, &cache_root)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("launch failed: {e}")))?
 }
 
 /// Show what would run, so a misconfigured emulator is obvious before launch.
@@ -1109,14 +1117,52 @@ pub fn cache_usage(app: AppHandle, db: State<Db>) -> CacheUsage {
     }
 }
 
-/// Swap a game's archive for the unpacked ROM inside it, deleting the archive.
+/// Swap a game's archive for what is inside it, deleting the archive.
+///
+/// Off the main thread and with the library unlocked while it unpacks, which
+/// for a console package is gigabytes; the library is only touched at the end,
+/// to point the entry at the unpacked game.
 #[tauri::command]
-pub fn unpack_in_place(app: AppHandle, db: State<Db>, id: i64) -> Result<String> {
-    let cache_root = app.state::<AppState>().media_root.clone();
-    let conn = db.0.lock().unwrap();
-    let game = db::get_game(&conn, id)?
-        .ok_or_else(|| AppError::Other("Game not found".into()))?;
-    launch::unpack_in_place(&conn, &game, &cache_root)
+pub async fn unpack_in_place(app: AppHandle, id: i64) -> Result<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let db = app.state::<Db>();
+        let game = {
+            let conn = db.0.lock().unwrap();
+            db::get_game(&conn, id)?.ok_or_else(|| AppError::Other("Game not found".into()))?
+        };
+        let cache_root = app.state::<AppState>().media_root.clone();
+
+        let mut last = std::time::Instant::now();
+        let mut report = |done: u64, total: u64| {
+            if done < total && last.elapsed() < std::time::Duration::from_millis(200) {
+                return;
+            }
+            last = std::time::Instant::now();
+            let _ = app.emit(
+                "unpack-progress",
+                serde_json::json!({
+                    "gameId": game.id, "title": game.title,
+                    "done": done, "total": total, "finished": false,
+                }),
+            );
+        };
+        let result = launch::unpack_in_place(&game, &cache_root, &mut report);
+        let _ = app.emit(
+            "unpack-progress",
+            serde_json::json!({ "gameId": game.id, "title": game.title, "finished": true }),
+        );
+        let unpacked = result?;
+
+        let conn = db.0.lock().unwrap();
+        conn.execute(
+            "UPDATE games SET path = ?2, filename = ?3, inner_name = NULL, size = ?4
+             WHERE id = ?1",
+            rusqlite::params![game.id, unpacked.path, unpacked.filename, unpacked.size as i64],
+        )?;
+        Ok(unpacked.message)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("unpack failed: {e}")))?
 }
 
 /// Empty it. Nothing on disk outside the cache is touched, and every entry is
