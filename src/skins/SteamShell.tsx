@@ -7,7 +7,7 @@
  * larger type, fewer things, and a focus ring you can see across a room.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 
 import { artUrl } from "../api";
 import SystemIcon from "../components/SystemIcon";
@@ -168,6 +168,7 @@ export default function SteamShell(props: ShellProps) {
             <input
               value={search}
               placeholder="Search"
+          aria-label="Search your library"
               onChange={(e) => onSearch(e.target.value)}
               data-nav
             />
@@ -216,7 +217,8 @@ export default function SteamShell(props: ShellProps) {
   );
 }
 
-function Capsule({
+/** Memoised: only the tiles whose game or selection changed re-render as the pad moves. */
+const Capsule = memo(function Capsule({
   game,
   on,
   onSelect,
@@ -250,4 +252,4 @@ function Capsule({
       {game.favorite && <span className="st-fav">★</span>}
     </button>
   );
-}
+});

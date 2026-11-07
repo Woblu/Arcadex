@@ -26,7 +26,7 @@
  * the app starts closing anything.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { artUrl, formatPlaytime } from "../api";
 import SystemIcon from "../components/SystemIcon";
@@ -102,11 +102,17 @@ export default function WiiShell(props: ShellProps) {
   // version listed the page in its dependencies, so turning a page re-ran this,
   // found the selection still on the page before, and turned it back. The
   // arrows appeared to do nothing at all.
+  //
+  // The list changing counts too. A new filter turns back to the first page,
+  // and a selection that survived the filter on a later page was left there,
+  // with the tray and Start acting on a channel that was not on screen.
   const followed = useRef<number | null>(null);
+  const followedGames = useRef(games);
   useEffect(() => {
     if (selectedId == null) return;
-    if (followed.current === selectedId) return;
+    if (followed.current === selectedId && followedGames.current === games) return;
     followed.current = selectedId;
+    followedGames.current = games;
     const index = games.findIndex((g) => g.id === selectedId);
     if (index < 0) return;
     setPage(Math.floor(index / PER_PAGE));
@@ -164,6 +170,7 @@ export default function WiiShell(props: ShellProps) {
           className="wii-search"
           value={search}
           placeholder="Search"
+          aria-label="Search your library"
           onChange={(e) => onSearch(e.target.value)}
           data-nav
         />
@@ -301,7 +308,8 @@ export default function WiiShell(props: ShellProps) {
   );
 }
 
-function Channel({
+/** Memoised: only the tiles whose game or selection changed re-render as the pad moves. */
+const Channel = memo(function Channel({
   game,
   on,
   onSelect,
@@ -346,7 +354,7 @@ function Channel({
       {game.favorite && <span className="wii-fav" aria-hidden="true">★</span>}
     </button>
   );
-}
+});
 
 function Chevron({ dir }: { dir: "left" | "right" }) {
   return (

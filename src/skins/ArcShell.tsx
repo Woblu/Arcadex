@@ -107,6 +107,7 @@ export default function ArcShell(props: ShellProps) {
           className="arc-search"
           value={search}
           placeholder="Search"
+          aria-label="Search your library"
           onChange={(e) => onSearch(e.target.value)}
           data-nav
         />

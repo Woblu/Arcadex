@@ -235,10 +235,12 @@ pub fn write_file(
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
+            // The same name give or take punctuation and case, and nothing
+            // looser. A prefix was once enough, which made Super Mario Bros. 3
+            // overwrite Super Mario Bros.'s codes on every launch, and the
+            // other way round.
             let stem_key = loose(stem);
-            let related = keys
-                .iter()
-                .any(|k| stem_key == *k || stem_key.starts_with(k.as_str()) || k.starts_with(&stem_key));
+            let related = keys.iter().any(|k| stem_key == *k);
             if related && !names.iter().any(|n| n == stem) {
                 names.push(stem.to_string());
             }
@@ -369,6 +371,35 @@ cheat1_enable = false
         assert!(refreshed.contains(r#"cheats = "1""#));
         assert!(refreshed.contains("079E:07"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sequel's cheats are not written over the original's, nor the other
+    /// way round, though one name begins with the other.
+    #[test]
+    fn leaves_another_games_cheat_file_alone() {
+        let dir = std::env::temp_dir().join(format!("playdex-cht-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let core = dir.join("Mesen");
+        std::fs::create_dir_all(&core).unwrap();
+        std::fs::write(core.join("Super Mario Bros.cht"), "smb1").unwrap();
+        std::fs::write(core.join("Super Mario Bros. 3 (USA) (Rev 1).cht"), "smb3 rev1").unwrap();
+
+        let cheats = [Cheat {
+            index: 0,
+            description: "Start with 99 lives".into(),
+            code: "0736:63".into(),
+            enabled: true,
+        }];
+        write_file(&dir, "Mesen", "Super Mario Bros. 3 (USA)", "Super Mario Bros 3", &cheats).unwrap();
+
+        assert_eq!(std::fs::read_to_string(core.join("Super Mario Bros.cht")).unwrap(), "smb1");
+        assert_eq!(
+            std::fs::read_to_string(core.join("Super Mario Bros. 3 (USA) (Rev 1).cht")).unwrap(),
+            "smb3 rev1",
+            "a different revision is a different dump"
+        );
+        assert!(core.join("Super Mario Bros 3.cht").is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

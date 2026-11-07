@@ -35,6 +35,7 @@ export default function TopBar({
         <span className="icon">⌕</span>
         <input
           value={search}
+          aria-label="Search your library"
           placeholder="Search your library…"
           onChange={(e) => onSearch(e.target.value)}
         />
@@ -46,6 +47,7 @@ export default function TopBar({
 
       <select
         className="select-inline"
+        aria-label="Sort by"
         value={sort}
         onChange={(e) => onSort(e.target.value as SortKey)}
       >

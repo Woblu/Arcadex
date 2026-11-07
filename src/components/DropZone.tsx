@@ -12,7 +12,7 @@
  * first, and these are often gigabytes.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 interface Props {
@@ -23,6 +23,12 @@ interface Props {
 export default function DropZone({ onDrop }: Props) {
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The subscription is made once, so it calls through this to whichever
+  // handler is current. Calling the first render's handler refreshed the grid
+  // with the filter the app started with, so after a drop the whole library
+  // showed whatever system or search was chosen.
+  const handler = useRef(onDrop);
+  handler.current = onDrop;
 
   useEffect(() => {
     let cancelled = false;
@@ -37,7 +43,7 @@ export default function DropZone({ onDrop }: Props) {
         if (paths.length === 0) return;
         setBusy(true);
         try {
-          await onDrop(paths);
+          await handler.current(paths);
         } finally {
           if (!cancelled) setBusy(false);
         }
@@ -51,7 +57,8 @@ export default function DropZone({ onDrop }: Props) {
       void pending.then((unlisten) => unlisten());
     };
     // `onDrop` is recreated every render by the caller; re-subscribing on each
-    // one would drop events mid-drag, so the handler is bound once.
+    // one would drop events mid-drag, so this subscribes once and reads the
+    // current handler through the ref above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -66,11 +66,17 @@ export default function StatsModal({ onClose, onPick }: Props) {
       className="overlay"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="modal" style={{ maxWidth: 620 }}>
+      <div
+        className="modal"
+        style={{ maxWidth: 620 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="stats-title"
+      >
         <div className="modal-head">
-          Your library
+          <span id="stats-title">Your library</span>
           <span className="spacer" />
-          <button className="btn small ghost" onClick={onClose}>
+          <button className="btn small ghost" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
@@ -79,7 +85,8 @@ export default function StatsModal({ onClose, onPick }: Props) {
           {error && <div className="error-banner">{error}</div>}
 
           {!data ? (
-            <div className="hint">Loading…</div>
+            // An error is said above; "Loading" under it forever was not true.
+            !error && <div className="hint">Loading…</div>
           ) : data.totalPlaySeconds === 0 ? (
             <div className="hint">
               Nothing played yet. Launch something and this fills in — playtime

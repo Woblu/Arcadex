@@ -56,6 +56,7 @@ export default function GameDetail({
   /** The discs behind a multi-disc entry. Empty for an ordinary game. */
   const [discs, setDiscs] = useState<Game[]>([]);
   const [scrapeNote, setScrapeNote] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   // A different game opened in the same panel must not inherit the half-typed
   // name or the open picker from the one before.
@@ -64,6 +65,7 @@ export default function GameDetail({
     setDraftTitle(game.title);
     setBorrowList(null);
     setBorrowFrom("");
+    setConfirmRemove(false);
   }, [game.id, game.title]);
 
   useEffect(() => {
@@ -392,17 +394,40 @@ export default function GameDetail({
         <SavesSection key={`saves-${sectionKey}`} game={game} />
 
         <div className="section-title">Manage</div>
-        <div className="row">
-          <button className="btn small" onClick={() => void api.revealGame(game.id)}>
-            Show in folder
-          </button>
-          <button className="btn small danger" onClick={onRemove}>
-            Remove from library
-          </button>
-        </div>
-        <div className="hint" style={{ marginTop: 6 }}>
-          Removing only forgets the entry here. The file on disk is untouched.
-        </div>
+        {confirmRemove ? (
+          // Asked once, in place. Removing forgets play time, favourite and
+          // any name or cover chosen here, and nothing used to stand between
+          // a stray click and losing them.
+          <div className="unpack-box">
+            <div className="hint">
+              Remove <strong>{game.title}</strong> from the library? Its play time,
+              favourite and anything you chose for it here are forgotten. The file
+              on disk is untouched, and any hacks made from it stay.
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <button className="btn small danger" onClick={onRemove}>
+                Remove it
+              </button>
+              <button className="btn small" onClick={() => setConfirmRemove(false)}>
+                Keep it
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="row">
+              <button className="btn small" onClick={() => void api.revealGame(game.id)}>
+                Show in folder
+              </button>
+              <button className="btn small danger" onClick={() => setConfirmRemove(true)}>
+                Remove from library
+              </button>
+            </div>
+            <div className="hint" style={{ marginTop: 6 }}>
+              Removing only forgets the entry here. The file on disk is untouched.
+            </div>
+          </>
+        )}
       </div>
     </aside>
   );

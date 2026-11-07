@@ -11,7 +11,7 @@ import HacksTab from "./settings/HacksTab";
 import MetadataTab from "./settings/MetadataTab";
 import type { TabProps } from "./settings/tab";
 
-type Tab = "folders" | "emulators" | "metadata" | "hacks" | "dats" | "appearance";
+export type Tab = "folders" | "emulators" | "metadata" | "hacks" | "dats" | "appearance";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "folders", label: "ROM folders" },
@@ -23,6 +23,8 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 interface Props {
+  /** The tab to open on; the first-run checklist sends you to the one it means. */
+  initialTab?: Tab;
   onClose: () => void;
   /** Applied at once, so the picker is its own preview. */
   onSkinChange: (skin: SkinName) => void;
@@ -44,13 +46,14 @@ interface Props {
  * download carries on, and is still reporting, after a look at another tab.
  */
 export default function SettingsModal({
+  initialTab = "folders",
   onClose,
   onSkinChange,
   onScanRequest,
   onRefetchAll,
 }: Props) {
-  const [tab, setTab] = useState<Tab>("folders");
-  const [opened, setOpened] = useState<Set<Tab>>(() => new Set<Tab>(["folders"]));
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [opened, setOpened] = useState<Set<Tab>>(() => new Set<Tab>([initialTab]));
   const [settings, setSettings] = useState<Settings>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

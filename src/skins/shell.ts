@@ -33,7 +33,8 @@ export const SKINS: Array<{ value: SkinName; label: string; blurb: string }> = [
   },
   {
     value: "steam",
-    label: "Big Picture",
+    // Not "Big Picture", which is Valve's name for Steam's own TV mode.
+    label: "Lounge",
     blurb: "Living-room layout: hero art up top, capsules below, made for a pad.",
   },
   {

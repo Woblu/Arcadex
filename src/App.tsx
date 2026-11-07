@@ -10,17 +10,19 @@ import type {
   PlatformInfo,
   ScanProgress,
   ScrapeProgress,
+  SetupStatus,
   SortKey,
   UnpackProgress,
 } from "./types";
 
 import GameDetail from "./components/GameDetail";
-import SettingsModal from "./components/SettingsModal";
+import SettingsModal, { type Tab } from "./components/SettingsModal";
+import SetupChecklist from "./components/SetupChecklist";
 import StatsModal from "./components/StatsModal";
 import ProgressToast from "./components/ProgressToast";
 import UpdateBanner from "./components/UpdateBanner";
 import DropZone from "./components/DropZone";
-import { checkForUpdate, type UpdateInfo } from "./update";
+import { checkForUpdate, setGameRunning, type UpdateInfo } from "./update";
 
 import LaunchboxShell from "./skins/LaunchboxShell";
 import SwitchShell from "./skins/SwitchShell";
@@ -41,6 +43,7 @@ import {
   focusInDirection,
   resolveBindings,
   useGamepad,
+  usePadCapture,
   type PadBindings,
   type PadInfo,
   type PadLayout,
@@ -62,6 +65,20 @@ const SHELLS: Record<SkinName, React.ComponentType<ShellProps>> = {
   wii: WiiShell,
   browser: BrowserShell,
 };
+
+/**
+ * A callback whose identity never changes but which always runs the latest
+ * version of `fn`.
+ *
+ * The tiles in every skin are memoised, which only helps if what they are
+ * handed stays the same object from render to render; a fresh closure each
+ * time made every tile in the library re-render on every press of the pad.
+ */
+function useStable<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback((...args: A) => ref.current(...args), []);
+}
 
 export default function App() {
   const [games, setGames] = useState<Game[]>([]);
@@ -99,8 +116,15 @@ export default function App() {
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
   /** A game being unpacked before it starts, which can take minutes. */
   const [unpacking, setUnpacking] = useState<UnpackProgress | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [setupDismissed, setSetupDismissed] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<Tab>("folders");
+  const capturing = usePadCapture();
 
-  const hideTimer = useRef<number | null>(null);
+  // One timer each. A shared one meant a fetch finishing within a few seconds
+  // of the scan cancelled the scan card's hiding, and it stayed up for good.
+  const scanHide = useRef<number | null>(null);
+  const scrapeHide = useRef<number | null>(null);
 
   const filter: GameFilter = useMemo(
     () => ({
@@ -135,6 +159,8 @@ export default function App() {
     } catch (e) {
       setError(errorMessage(e));
     }
+    // Whatever changed the library may have changed what is left to set up.
+    void api.setupStatus().then(setSetupStatus).catch(() => setSetupStatus(null));
   }, []);
 
   useEffect(() => {
@@ -151,6 +177,7 @@ export default function App() {
     try {
       const values = await api.getSettings();
       setSkin(isSkin(values.ui_skin) ? values.ui_skin : DEFAULT_SKIN);
+      setSetupDismissed(values.setup_dismissed === "1");
 
       const layout = values.pad_layout;
       if (layout === "auto" || layout === "standard" || layout === "nintendo" || layout === "custom") {
@@ -188,15 +215,17 @@ export default function App() {
         if (e.payload.done) {
           void refreshGames();
           void refreshSidebar();
-          scheduleHide(() => setScan(null));
+          scheduleHide(scanHide, () => setScan(null));
         }
       }),
       listen<ScrapeProgress>("scrape-progress", (e) => {
         setScrape(e.payload);
         if (e.payload.done) {
+          // Fetched artwork is written over any older file of the same name.
+          api.bumpArtVersion();
           void refreshGames();
           void refreshSidebar();
-          scheduleHide(() => setScrape(null));
+          scheduleHide(scrapeHide, () => setScrape(null));
         }
       }),
       listen<UnpackProgress>("unpack-progress", (e) => {
@@ -217,10 +246,16 @@ export default function App() {
     };
   }, [refreshGames, refreshSidebar]);
 
-  function scheduleHide(fn: () => void) {
-    if (hideTimer.current) window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(fn, 4000);
+  function scheduleHide(timer: React.MutableRefObject<number | null>, fn: () => void) {
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(fn, 4000);
   }
+
+  // Installing an update restarts the app, which would lose a running game's
+  // session; the updater refuses while this is set.
+  useEffect(() => {
+    setGameRunning(!!nowPlaying || !!unpacking);
+  }, [nowPlaying, unpacking]);
 
   const selected = useMemo(
     () => games.find((g) => g.id === selectedId) ?? null,
@@ -240,32 +275,44 @@ export default function App() {
     }
   }
 
-  const handleScan = () =>
-    run(async () => {
-      const result = await api.scanLibrary();
+  /**
+   * Fetch metadata, outside `run`.
+   *
+   * A fetch can take hours on a big first import, and `run` holds the app busy
+   * for as long as it goes - which disabled Play, Favourite and Rename the
+   * whole time. The progress card carries its own Stop button, and its
+   * progress is reported by event, so nothing needs to wait on it.
+   */
+  const fetchMetadata = async (from: string | null, refetch: boolean, quiet: boolean) => {
+    try {
+      const summary = await api.scrapeLibrary(from, refetch);
+      setScrape((prev) => (prev ? { ...prev, done: true, status: summary } : prev));
+    } catch (e) {
+      // After a scan, every provider switched off is a setting, not a
+      // failure worth a banner.
+      if (quiet) {
+        setScrape((prev) => (prev ? { ...prev, done: true, status: api.errorMessage(e) } : prev));
+      } else {
+        setError(errorMessage(e));
+      }
+    }
+    await refreshGames();
+  };
+
+  const handleScan = async () => {
+    const result = await run(async () => {
+      const found = await api.scanLibrary();
       await refreshGames();
       await refreshSidebar();
-
-      // A new game arrives with nothing but a filename, so go and get its
-      // artwork and details straight away rather than making that a second
-      // thing to remember. Only when the scan actually found something, and
-      // only for entries that still need it — this re-runs no work. The
-      // progress toast carries its own cancel button.
-      if (result.added > 0) {
-        try {
-          const summary = await api.scrapeLibrary(null);
-          setScrape((prev) =>
-            prev ? { ...prev, done: true, status: summary } : prev,
-          );
-        } catch (e) {
-          // Every provider switched off is a setting, not a failed scan.
-          setScrape((prev) =>
-            prev ? { ...prev, done: true, status: api.errorMessage(e) } : prev,
-          );
-        }
-        await refreshGames();
-      }
+      return found;
     });
+
+    // A new game arrives with nothing but a filename, so go and get its
+    // artwork and details straight away rather than making that a second
+    // thing to remember. Only when the scan actually found something, and
+    // only for entries that still need it — this re-runs no work.
+    if (result && result.added > 0) await fetchMetadata(null, false, true);
+  };
 
   // Dropping a ROM on the window is the same act as scanning finds it, so it
   // goes through the same indexing and then the same automatic metadata fetch.
@@ -296,13 +343,7 @@ export default function App() {
     }
   };
 
-  const handleScrape = () =>
-    run(async () => {
-      const summary = await api.scrapeLibrary(platform);
-      setScrape((prev) =>
-        prev ? { ...prev, done: true, status: summary } : prev,
-      );
-    });
+  const handleScrape = () => fetchMetadata(platform, false, false);
 
   /**
    * Go back over everything, including games that already have artwork.
@@ -312,13 +353,7 @@ export default function App() {
    * a button called "fetch everything" quietly doing one shelf would be a
    * worse surprise than doing what it says.
    */
-  const handleRefetchAll = () =>
-    run(async () => {
-      const summary = await api.scrapeLibrary(null, true);
-      setScrape((prev) =>
-        prev ? { ...prev, done: true, status: summary } : prev,
-      );
-    });
+  const handleRefetchAll = () => fetchMetadata(null, true, false);
 
   /**
    * One game at a time.
@@ -344,7 +379,15 @@ export default function App() {
   const handleToggleFavorite = (game: Game) =>
     run(async () => {
       await api.setFavorite(game.id, !game.favorite);
-      await refreshGames();
+      // Changed where it stands rather than fetching the whole library again,
+      // which on a big one re-rendered every tile for one star. Only a list
+      // of favourites actually changes shape.
+      if (favoritesOnly) {
+        await refreshGames();
+      } else {
+        setGames((all) => all.map((g) => (g.id === game.id ? { ...g, favorite: !game.favorite } : g)));
+      }
+      void refreshSidebar();
     });
 
   const handleScrapeOne = (id: number) =>
@@ -501,11 +544,19 @@ export default function App() {
       // Hands off entirely while a game is running. The emulator has the pad,
       // and every press meant for the game was also arriving here - which,
       // with a game tile focused, started the game again on every press.
-      enabled: !nowPlaying,
+      // Likewise while the controller setup is listening for a button.
+      enabled: !nowPlaying && !capturing,
     },
   );
 
   // ------------------------------------------------------------ rendering
+
+  const stableLaunch = useStable(handleLaunch);
+  const stableToggleFavorite = useStable(handleToggleFavorite);
+  const stableOpenDetail = useStable((id: number) => {
+    setSelectedId(id);
+    setDetailOpen(true);
+  });
 
   const shell: ShellProps = {
     games,
@@ -538,18 +589,15 @@ export default function App() {
     onSearch: setSearch,
     onSort: setSort,
     onSelect: setSelectedId,
-    onLaunch: handleLaunch,
-    onToggleFavorite: handleToggleFavorite,
-    onOpenDetail: (id) => {
-      setSelectedId(id);
-      setDetailOpen(true);
-    },
+    onLaunch: stableLaunch,
+    onToggleFavorite: stableToggleFavorite,
+    onOpenDetail: stableOpenDetail,
     registerBack: (handler) => {
       skinBack.current = handler;
     },
     onScan: handleScan,
     onScrape: handleScrape,
-    onOpenSettings: () => setSettingsOpen(true),
+    onOpenSettings: () => openSettings("folders"),
     onOpenStats: () => setStatsOpen(true),
   };
 
@@ -557,6 +605,28 @@ export default function App() {
   // and living-room skins show their own game page instead, so there the
   // panel is the "Options" / "Manage" button and nothing else.
   const showDetail = selected && (skin === "launchbox" || detailOpen);
+
+  const openSettings = (tab: Tab) => {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  };
+
+  const addFirstFolder = async () => {
+    try {
+      const path = await api.pickFolder();
+      if (!path) return;
+      await api.addLibraryFolder(path, null);
+      await handleScan();
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  };
+
+  const showSetup =
+    !!setupStatus &&
+    !setupDismissed &&
+    ((setupStatus.folders === 0 && setupStatus.games === 0) ||
+      setupStatus.systemsWithoutEmulator.length > 0);
 
   const closeDetail = () => {
     setDetailOpen(false);
@@ -583,13 +653,17 @@ export default function App() {
             void refreshGames();
             void refreshSidebar();
           }}
-          onArtworkChanged={() => void refreshGames()}
+          onArtworkChanged={() => {
+            api.bumpArtVersion();
+            void refreshGames();
+          }}
           busy={busy}
         />
       )}
 
       {settingsOpen && (
         <SettingsModal
+          initialTab={settingsTab}
           onSkinChange={setSkin}
           onScanRequest={() => void handleScan()}
           onRefetchAll={() => void handleRefetchAll()}
@@ -606,8 +680,16 @@ export default function App() {
         <StatsModal
           onClose={() => setStatsOpen(false)}
           onPick={(id) => {
+            // The game may be outside whatever the library is filtered to, so
+            // the filters go first, then its panel opens. Selecting it alone
+            // closed the window and did nothing visible.
             setStatsOpen(false);
+            setPlatform(null);
+            setSearch("");
+            setFavoritesOnly(false);
+            setUnscrapedOnly(false);
             setSelectedId(id);
+            setDetailOpen(true);
           }}
         />
       )}
@@ -616,9 +698,22 @@ export default function App() {
 
       {dropNote && <div className="drop-note">{dropNote}</div>}
 
-      {update && !updateDismissed && (
-        <UpdateBanner info={update} onDismiss={() => setUpdateDismissed(true)} />
-      )}
+      <div className="corner-stack">
+        {showSetup && setupStatus && (
+          <SetupChecklist
+            status={setupStatus}
+            onAddFolder={() => void addFirstFolder()}
+            onOpenSettings={openSettings}
+            onDismiss={() => {
+              setSetupDismissed(true);
+              void api.saveSettings({ setup_dismissed: "1" });
+            }}
+          />
+        )}
+        {update && !updateDismissed && (
+          <UpdateBanner info={update} onDismiss={() => setUpdateDismissed(true)} />
+        )}
+      </div>
 
       {(scan || scrape || nowPlaying || unpacking) && (
         <ProgressToast

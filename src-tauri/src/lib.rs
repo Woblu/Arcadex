@@ -303,6 +303,8 @@ pub fn run() {
             commands::borrow_metadata,
             commands::scan_library,
             commands::clean_missing,
+            commands::missing_report,
+            commands::setup_status,
             commands::scrape_library,
             commands::scrape_one,
             commands::cancel_scrape,

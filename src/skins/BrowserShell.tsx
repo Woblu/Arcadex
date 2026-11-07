@@ -11,7 +11,7 @@
  * dropped entirely for anyone who has asked for reduced motion.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 
 import { artUrl, formatPlaytime } from "../api";
 import SystemIcon from "../components/SystemIcon";
@@ -59,8 +59,9 @@ export default function BrowserShell(props: ShellProps) {
     [platforms],
   );
 
-  // The facts list is the one place a system is spelled out, so it gets the
-  // real name rather than the slug the rest of the skin abbreviates to.
+  // Systems by their real names, in the facts list and on every card. The
+  // cards used to show the internal slug, which in this skin's capitals read
+  // as a code - XBOX360, PS3 - rather than as anything a person would say.
   const systemName = useMemo(() => {
     const bySlug = new Map(platforms.map((p) => [p.slug, p.name]));
     return (slug: string) => bySlug.get(slug) ?? slug;
@@ -125,6 +126,7 @@ export default function BrowserShell(props: ShellProps) {
           className="br-search"
           value={search}
           placeholder="Search"
+          aria-label="Search your library"
           onChange={(e) => onSearch(e.target.value)}
           data-nav
         />
@@ -154,6 +156,7 @@ export default function BrowserShell(props: ShellProps) {
               <Card
                 key={game.id}
                 game={game}
+                system={systemName(game.platform)}
                 on={game.id === selectedId}
                 onSelect={onSelect}
                 onLaunch={onLaunch}
@@ -237,13 +240,16 @@ function Fact({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-function Card({
+/** Memoised: only the tiles whose game or selection changed re-render as the pad moves. */
+const Card = memo(function Card({
   game,
+  system,
   on,
   onSelect,
   onLaunch,
 }: {
   game: Game;
+  system: string;
   on: boolean;
   onSelect: (id: number) => void;
   onLaunch: (id: number) => void;
@@ -268,9 +274,9 @@ function Card({
       </span>
       <span className="br-card-text">
         <span className="br-card-title">{game.title}</span>
-        <span className="br-card-sub">{game.platform}</span>
+        <span className="br-card-sub">{system}</span>
       </span>
       {game.favorite && <span className="br-star">★</span>}
     </button>
   );
-}
+});

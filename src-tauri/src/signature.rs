@@ -65,6 +65,23 @@ pub const SIGNATURES: &[Signature] = &[
 const HEAD_BYTES: usize = 0x300;
 
 /// The system a file's own bytes claim, if any of them do.
+/// The system the start of a disc image says it is, given only its first
+/// few megabytes - read out of an archive, where reaching the rest would mean
+/// decompressing it.
+///
+/// Everything checked here sits near the front: header magic, an ISO 9660
+/// filesystem and the small file in its root that names the console, and an
+/// Xbox filesystem when the image starts with the game. A full Xbox 360 dump,
+/// whose game starts a quarter of a gigabyte in, is out of reach and says
+/// nothing.
+pub fn identify_head(head: &[u8]) -> Option<&'static str> {
+    if let Some(found) = identify_bytes(&head[..head.len().min(HEAD_BYTES)]) {
+        return Some(found);
+    }
+    let mut disc = std::io::Cursor::new(head);
+    iso9660_in(&mut disc).or_else(|| xdvdfs_in(&mut disc, head.len() as u64))
+}
+
 pub fn identify(path: &Path) -> Option<&'static str> {
     let mut head = vec![0u8; HEAD_BYTES];
     let read = std::fs::File::open(path)
@@ -112,7 +129,12 @@ const LAYOUTS: &[Layout] = &[
 ];
 
 /// Read one sector's worth of filesystem out of an image.
-fn read_sector(file: &mut std::fs::File, layout: &Layout, lba: u64) -> Option<Vec<u8>> {
+/// Anything a disc can be read from: a file, or the start of one held in
+/// memory after reading it out of an archive.
+trait Disc: Read + Seek {}
+impl<T: Read + Seek> Disc for T {}
+
+fn read_sector(file: &mut dyn Disc, layout: &Layout, lba: u64) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; DATA];
     file.seek(SeekFrom::Start(lba * layout.sector + layout.data))
         .ok()?;
@@ -126,7 +148,7 @@ fn read_sector(file: &mut std::fs::File, layout: &Layout, lba: u64) -> Option<Ve
 /// nothing else. A raw track cannot: every 2048 bytes of filesystem has a
 /// few hundred bytes of sync and error correction bolted around it, so the
 /// pieces have to be gathered one sector at a time.
-fn read_extent(file: &mut std::fs::File, layout: &Layout, lba: u64, len: usize) -> Option<Vec<u8>> {
+fn read_extent(file: &mut dyn Disc, layout: &Layout, lba: u64, len: usize) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(len);
     let sectors = len.div_ceil(DATA) as u64;
     for i in 0..sectors {
@@ -138,7 +160,7 @@ fn read_extent(file: &mut std::fs::File, layout: &Layout, lba: u64, len: usize) 
 
 /// The layout an image is in, judged by where its primary volume descriptor
 /// turns up: descriptor type 1 followed by the standard identifier.
-fn layout_of(file: &mut std::fs::File) -> Option<&'static Layout> {
+fn layout_of(file: &mut dyn Disc) -> Option<&'static Layout> {
     LAYOUTS.iter().find(|layout| {
         read_sector(file, layout, PVD_SECTOR)
             .map(|pvd| pvd[0] == 1 && &pvd[1..6] == b"CD001")
@@ -163,7 +185,11 @@ fn layout_of(file: &mut std::fs::File) -> Option<&'static Layout> {
 /// the same either way; only the packaging around each sector differs, and
 /// `layout_of` works out which is in front of it before reading anything.
 pub fn identify_iso9660(path: &Path) -> Option<&'static str> {
-    let mut file = std::fs::File::open(path).ok()?;
+    iso9660_in(&mut std::fs::File::open(path).ok()?)
+}
+
+fn iso9660_in(file: &mut dyn Disc) -> Option<&'static str> {
+    let mut file = file;
     let layout = layout_of(&mut file)?;
     let pvd = read_sector(&mut file, layout, PVD_SECTOR)?;
 
@@ -282,6 +308,10 @@ const XDVDFS_PARTITIONS: &[(u64, Option<&str>)] = &[
 pub fn identify_xdvdfs(path: &Path) -> Option<&'static str> {
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
+    xdvdfs_in(&mut file, len)
+}
+
+fn xdvdfs_in(file: &mut dyn Disc, len: u64) -> Option<&'static str> {
 
     for (base, generation) in XDVDFS_PARTITIONS {
         let at = base + 32 * DATA as u64;

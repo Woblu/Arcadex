@@ -18,7 +18,9 @@
 
   --text: #e7eaef;
   --text-2: #98a2b2;
-  --text-3: #69727f;
+  /* At least 4.5:1 on every surface it sits on; the old #69727f was 3.6:1
+     on panels, under what small text needs. */
+  --text-3: #818a97;
 
   --accent: #6ea8fe;
   --accent-soft: rgba(110, 168, 254, 0.14);

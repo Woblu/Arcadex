@@ -154,6 +154,13 @@ pub struct Grouped {
 /// for each way it can change. The playlist rows themselves are matched by
 /// path and updated in place, so a set keeps its play time and its artwork.
 pub fn regroup(conn: &rusqlite::Connection, playlist_root: &Path) -> Result<Grouped> {
+    // One transaction for the lot: a write per disc each committing on its own
+    // was slow on a big library, and held every other query waiting meanwhile.
+    // A failure part way also leaves the sets as they were rather than half
+    // released.
+    let tx = conn.unchecked_transaction()?;
+    let conn: &rusqlite::Connection = &tx;
+
     // Everything starts ungrouped, and is grouped again below if it still
     // belongs to a set.
     db::release_all_discs(conn)?;
@@ -236,6 +243,7 @@ pub fn regroup(conn: &rusqlite::Connection, playlist_root: &Path) -> Result<Grou
         let _ = std::fs::remove_file(&path);
     }
 
+    tx.commit()?;
     Ok(tally)
 }
 

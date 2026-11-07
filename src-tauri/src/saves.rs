@@ -69,6 +69,17 @@ fn modified_secs(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
+/// Whether a save file is this ROM's: its name exactly, then a dot.
+///
+/// The name alone at the start is not enough. "Tetris (USA)" begins
+/// "Tetris (USA) (Rev 1).state1", and that state - another dump's, perhaps
+/// another game's - was listed, backed up and offered for deletion here.
+fn belongs_to(file_lower: &str, rom_lower: &str) -> bool {
+    file_lower
+        .strip_prefix(rom_lower)
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
 /// Find the saves and states belonging to one ROM.
 pub fn find(exe: &Path, rom_path: &Path, rom_name: &str, core_folder: &str) -> Vec<SaveEntry> {
     let mut out: Vec<SaveEntry> = Vec::new();
@@ -86,7 +97,7 @@ pub fn find(exe: &Path, rom_path: &Path, rom_name: &str, core_folder: &str) -> V
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if !name.to_ascii_lowercase().starts_with(&needle) {
+            if !belongs_to(&name.to_ascii_lowercase(), &needle) {
                 continue;
             }
             let Some((kind, slot)) = classify(name) else {
@@ -147,6 +158,17 @@ pub fn back_up(entries: &[SaveEntry], root: &Path, game_title: &str) -> Result<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_save_is_this_roms_only_if_named_for_it_exactly() {
+        let rom = "tetris (usa)";
+        assert!(belongs_to("tetris (usa).srm", rom));
+        assert!(belongs_to("tetris (usa).state3", rom));
+        assert!(belongs_to("tetris (usa).state.auto", rom));
+        assert!(!belongs_to("tetris (usa) (rev 1).state1", rom));
+        assert!(!belongs_to("tetris (usa)2.srm", rom));
+        assert!(!belongs_to("tetris.srm", rom));
+    }
 
     #[test]
     fn tells_battery_saves_from_states() {

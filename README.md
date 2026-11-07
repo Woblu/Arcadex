@@ -49,6 +49,14 @@ An archive too large to hash still records which file inside it is the game.
 Without that it looked unopened to every scan after, and was read again and
 reported as corrected each time.
 
+### Getting started
+
+A card in the corner lists the three things between installing and playing:
+adding your games, giving each system something to run it, and (optionally)
+an account for descriptions. It says which systems cannot start yet, by name,
+and its buttons go straight to where each is set up. It goes away once every
+system you have can start, or when hidden.
+
 ### Adding games
 
 Drag a ROM onto the window and it joins the library. The whole window is the
@@ -366,7 +374,9 @@ The patch formats live in `patch.rs` and are unit-tested.
 
 Patches can also be imported in bulk, either from a folder or straight from a
 `.7z` bundle. Bundles are streamed and only the patch files are extracted, so a
-35 GB archive costs a read instead of 35 GB of disk. Entry paths that try to
+35 GB archive costs a read instead of 35 GB of disk. One downloaded from the
+Internet Archive is deleted once its patches are out, and only that archive's
+own address is accepted for download. Entry paths that try to
 escape the destination are refused. Each patch is indexed by the CRC32 of the
 ROM it targets, so a game's detail panel can list exactly which catalogued hacks
 its dump will run.
@@ -459,7 +469,8 @@ Six layouts, under **Settings → Appearance**:
 - **Console**: a home screen. One row of large icons sized against the window,
   a caption underneath, and a row of small round system buttons that each go
   somewhere different, including an "All software" grid.
-- **Big Picture**: living room. Hero art, left rail, capsule shelf.
+- **Lounge**: living room. Hero art, left rail, capsule shelf. (It was called
+  Big Picture, which is Valve's name for Steam's own TV mode.)
 - **Arc**: one column of slabs down the middle of a dark screen, lit from one
   side. The selected slab steps toward the light rather than only changing
   colour, which is what stops the column reading as a list of links.
@@ -682,8 +693,15 @@ used as the fallback.
 the keys work, reporting your remaining allowance, so a bad key shows up
 immediately instead of as a wall of failures mid-scrape.
 
-Scraping paces itself at roughly three requests a second and stops cleanly when
-a provider says its quota is gone, telling you how far it got.
+Scraping paces itself at roughly three requests a second. A provider that says
+its allowance is spent - ScreenScraper's commonest refusal is per minute - sits
+out for a minute while the others carry on, and the run only stops when there
+is nothing left to ask; the summary says which provider rested. A game that
+fails on its own, artwork that will not save say, is marked as an error and the
+run moves on to the next.
+
+While a fetch runs, the rest of the app is not held up: Play, Favourite and
+Rename work as normal, and the progress card has its own Stop button.
 
 ### Emulators
 
@@ -861,10 +879,14 @@ you.
 
 ## Notes
 
-- Removing a game removes the library entry only. The file on disk is never
-  touched. The single exception is **Unpack and keep only the game**, which
-  deletes an archive after replacing it with the ROM from inside, and says so
-  before it does.
+- Removing a game removes the library entry only, and asks first. The file on
+  disk is never touched. Hacks made from it stay in the library as games of
+  their own; a multi-disc set goes with its discs. The single exception is
+  **Unpack and keep only the game**, which deletes an archive after replacing
+  it with the game from inside, and says so before it does.
+- **Clean missing entries** counts what it would remove and asks before
+  removing it. A game on a drive or network share that is not connected is not
+  missing, and is left alone.
 - The library lives in the app data directory next to the artwork cache, so
   deleting that folder resets everything without touching your ROMs.
 

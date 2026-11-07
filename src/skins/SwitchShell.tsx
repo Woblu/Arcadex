@@ -12,7 +12,7 @@
  * five ways of opening the same panel: each goes somewhere different.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { artUrl } from "../api";
 import Logo from "../components/Logo";
@@ -136,6 +136,7 @@ export default function SwitchShell(props: ShellProps) {
               className="sw-search-input"
               value={search}
               placeholder="Search"
+          aria-label="Search your library"
               autoFocus
               onChange={(e) => onSearch(e.target.value)}
               onBlur={() => !search && setSearchOpen(false)}
@@ -144,6 +145,7 @@ export default function SwitchShell(props: ShellProps) {
             <button
               className="sw-status-btn"
               title="Search"
+              aria-label="Search"
               onClick={() => setSearchOpen(true)}
             >
               <IconSearch />
@@ -153,6 +155,7 @@ export default function SwitchShell(props: ShellProps) {
           <button
             className={`sw-status-btn ${platform === null ? "on" : ""}`}
             title="All systems"
+            aria-label="All systems"
             onClick={() => onSelectPlatform(null)}
           >
             <IconAll />
@@ -163,6 +166,7 @@ export default function SwitchShell(props: ShellProps) {
               className={`sw-status-btn ${platform === p.slug ? "on" : ""}`}
               onClick={() => onSelectPlatform(p.slug)}
               title={p.name}
+              aria-label={p.name}
             >
               <SystemIcon platform={p.slug} size={17} />
             </button>
@@ -321,7 +325,8 @@ export default function SwitchShell(props: ShellProps) {
   );
 }
 
-function Tile({
+/** Memoised: only the tiles whose game or selection changed re-render as the pad moves. */
+const Tile = memo(function Tile({
   game,
   on,
   onSelect,
@@ -365,7 +370,7 @@ function Tile({
       {game.favorite && <span className="sw-fav">★</span>}
     </button>
   );
-}
+});
 
 function TrayButton({
   label,

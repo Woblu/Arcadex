@@ -556,19 +556,22 @@ pub fn borrow_metadata(
     logo: Option<&str>,
 ) -> Result<()> {
     conn.execute(
+        // Whatever the source has nothing for, the game keeps: borrowing
+        // from a game with no description, or no cover, used to blank this
+        // one's, including a cover picked by hand.
         "UPDATE games SET
-             description     = src.description,
-             developer       = src.developer,
-             publisher       = src.publisher,
-             genre           = src.genre,
-             release_date    = src.release_date,
-             players         = src.players,
-             rating          = src.rating,
-             region          = src.region,
-             cover_path      = ?3,
-             screenshot_path = ?4,
-             logo_path       = ?5,
-             cover_custom    = CASE WHEN ?3 IS NULL THEN 0 ELSE 1 END,
+             description     = COALESCE(src.description, games.description),
+             developer       = COALESCE(src.developer, games.developer),
+             publisher       = COALESCE(src.publisher, games.publisher),
+             genre           = COALESCE(src.genre, games.genre),
+             release_date    = COALESCE(src.release_date, games.release_date),
+             players         = COALESCE(src.players, games.players),
+             rating          = COALESCE(src.rating, games.rating),
+             region          = COALESCE(src.region, games.region),
+             cover_path      = COALESCE(?3, games.cover_path),
+             screenshot_path = COALESCE(?4, games.screenshot_path),
+             logo_path       = COALESCE(?5, games.logo_path),
+             cover_custom    = CASE WHEN ?3 IS NULL THEN games.cover_custom ELSE 1 END,
              scrape_status   = 'ok',
              scrape_source   = 'borrowed'
          FROM (SELECT * FROM games WHERE id = ?1) AS src
@@ -632,9 +635,69 @@ pub fn set_platform(conn: &Connection, id: i64, platform: &str) -> Result<()> {
 }
 
 /// Remove a game from the library. Never touches the ROM on disk.
+/// Forget one game. The file on disk is not touched.
+///
+/// Hacks made from it stay, as games of their own: their ROMs are separate
+/// files, and removing the original was never asking to lose them - the
+/// table's cascade used to take them, play time and all. A disc set goes
+/// with its discs, which are the same game; leaving them would leave them
+/// hidden and pointing at a set that no longer exists.
 pub fn remove_game(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute("DELETE FROM games WHERE id = ?1", params![id])?;
+    // A savepoint rather than a transaction, so this also works inside one -
+    // regrouping disc sets removes stale ones from within its own.
+    conn.execute_batch("SAVEPOINT remove_game")?;
+    let steps = || -> rusqlite::Result<()> {
+        conn.execute("UPDATE games SET base_game_id = NULL WHERE base_game_id = ?1", params![id])?;
+        conn.execute("DELETE FROM games WHERE disc_playlist_id = ?1", params![id])?;
+        conn.execute("DELETE FROM games WHERE id = ?1", params![id])?;
+        Ok(())
+    };
+    match steps() {
+        Ok(()) => conn.execute_batch("RELEASE remove_game")?,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO remove_game; RELEASE remove_game");
+            return Err(e.into());
+        }
+    }
     Ok(())
+}
+
+/// The entries whose files are gone, by id, and how many more could not be
+/// checked because the drive or share they are on is not there at all.
+///
+/// A drive that is not plugged in is not a library that has been deleted.
+/// Every game on an unreachable library folder, or under a drive or network
+/// share root that does not exist, is left out, so cleaning up while the NAS
+/// is asleep does not throw away everything on it.
+pub fn missing_entries(conn: &Connection) -> Result<(Vec<i64>, usize)> {
+    let roots: Vec<std::path::PathBuf> = list_folders(conn)?
+        .into_iter()
+        .map(|f| std::path::PathBuf::from(f.path))
+        .collect();
+    let mut stmt = conn.prepare("SELECT id, path FROM games WHERE disc_playlist_id IS NULL")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+
+    let mut missing = Vec::new();
+    let mut unreachable = 0;
+    for row in rows {
+        let (id, path) = row?;
+        let path = std::path::Path::new(&path);
+        if path.exists() {
+            continue;
+        }
+        let library_offline = roots.iter().any(|r| path.starts_with(r) && !r.exists());
+        // A path's last ancestor is its drive (`D:\`) or share (`\\nas\roms`).
+        let volume_offline = path
+            .ancestors()
+            .last()
+            .is_some_and(|top| !top.as_os_str().is_empty() && !top.exists());
+        if library_offline || volume_offline {
+            unreachable += 1;
+        } else {
+            missing.push(id);
+        }
+    }
+    Ok((missing, unreachable))
 }
 
 pub fn record_play(conn: &Connection, id: i64, started_at: i64, seconds: i64) -> Result<()> {
@@ -776,12 +839,6 @@ pub fn set_hashes(
     Ok(())
 }
 
-pub fn all_paths(conn: &Connection) -> Result<std::collections::HashSet<String>> {
-    let mut stmt = conn.prepare("SELECT path FROM games")?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-    Ok(rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()?)
-}
-
 // ------------------------------------------------------------ platforms
 
 pub fn platform_counts(conn: &Connection) -> Result<Vec<PlatformInfo>> {
@@ -809,16 +866,24 @@ pub fn platform_counts(conn: &Connection) -> Result<Vec<PlatformInfo>> {
     Ok(out)
 }
 
+/// The library as its lists show it: hidden entries and the discs folded
+/// into a multi-disc set are not games of their own. Counting them made "All
+/// games" disagree with the grid, and "Needs metadata" never reach nought,
+/// since a set's discs are never fetched for.
+const LISTED: &str = "hidden = 0 AND disc_playlist_id IS NULL";
+
 pub fn stats(conn: &Connection) -> Result<LibraryStats> {
     Ok(LibraryStats {
-        total_games: conn.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0))?,
+        total_games: conn.query_row(&format!("SELECT COUNT(*) FROM games WHERE {LISTED}"), [], |r| {
+            r.get(0)
+        })?,
         total_platforms: conn.query_row(
-            "SELECT COUNT(DISTINCT platform) FROM games",
+            &format!("SELECT COUNT(DISTINCT platform) FROM games WHERE {LISTED}"),
             [],
             |r| r.get(0),
         )?,
         scraped: conn.query_row(
-            "SELECT COUNT(*) FROM games WHERE scrape_status = 'ok'",
+            &format!("SELECT COUNT(*) FROM games WHERE scrape_status = 'ok' AND {LISTED}"),
             [],
             |r| r.get(0),
         )?,
@@ -1744,5 +1809,115 @@ mod rename_and_borrow_tests {
                 let _ = std::fs::remove_dir_all(&self.0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::*;
+
+    fn library(tag: &str) -> (std::path::PathBuf, Connection) {
+        let dir = std::env::temp_dir().join(format!("playdex-remove-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("library.db")).unwrap();
+        (dir, conn)
+    }
+
+    fn add(conn: &Connection, id: i64, path: &str, extra: &str) {
+        conn.execute(
+            &format!(
+                "INSERT INTO games (id, path, filename, platform, title, added_at{}) VALUES (?1, ?2, 'f', 'snes', 't', 0{})",
+                if extra.is_empty() { "" } else { ", base_game_id" },
+                if extra.is_empty() { "".to_string() } else { format!(", {extra}") }
+            ),
+            params![id, path],
+        )
+        .unwrap();
+    }
+
+    fn ids(conn: &Connection) -> Vec<i64> {
+        let mut stmt = conn.prepare("SELECT id FROM games ORDER BY id").unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    /// Removing a game used to take every hack made from it, by cascade.
+    #[test]
+    fn removing_a_game_keeps_the_hacks_made_from_it() {
+        let (dir, conn) = library("hacks");
+        add(&conn, 1, "C:/roms/smw.sfc", "");
+        add(&conn, 2, "C:/data/hacks/1/kaizo.sfc", "1");
+        remove_game(&conn, 1).unwrap();
+        assert_eq!(ids(&conn), vec![2]);
+        let base: Option<i64> = conn
+            .query_row("SELECT base_game_id FROM games WHERE id = 2", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(base, None);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_a_disc_set_takes_its_discs() {
+        let (dir, conn) = library("discs");
+        add(&conn, 1, "C:/data/playlists/ff7.m3u", "");
+        add(&conn, 2, "C:/roms/ff7 (Disc 1).cue", "");
+        add(&conn, 3, "C:/roms/ff7 (Disc 2).cue", "");
+        add(&conn, 4, "C:/roms/other.cue", "");
+        set_disc_members(&conn, 1, &[2, 3]).unwrap();
+        remove_game(&conn, 1).unwrap();
+        assert_eq!(ids(&conn), vec![4]);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file that is gone is missing; a whole drive that is not there is
+    /// not plugged in, and nothing on it is touched.
+    #[test]
+    fn a_drive_that_is_not_there_is_not_a_deleted_library() {
+        let (dir, conn) = library("missing");
+        let here = dir.join("present.sfc");
+        std::fs::write(&here, b"x").unwrap();
+        add(&conn, 1, &here.to_string_lossy(), "");
+        add(&conn, 2, &dir.join("deleted.sfc").to_string_lossy(), "");
+        // A share no machine on earth has.
+        add(&conn, 3, r"\playdex-no-such-host\roms\game.sfc", "");
+        add_folder(&conn, r"\playdex-no-such-host\roms", None).unwrap();
+
+        let (missing, unreachable) = missing_entries(&conn).unwrap();
+        assert_eq!(missing, vec![2]);
+        assert_eq!(unreachable, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Borrowing from a game with less leaves this one's own details be.
+    #[test]
+    fn borrowing_keeps_what_the_source_does_not_have() {
+        let (dir, conn) = library("borrow");
+        add(&conn, 1, "C:/roms/source.sfc", "");
+        add(&conn, 2, "C:/roms/target.sfc", "");
+        conn.execute(
+            "UPDATE games SET description = 'mine', cover_path = 'C:/media/2/cover.png', cover_custom = 1 WHERE id = 2",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE games SET developer = 'Nintendo' WHERE id = 1", []).unwrap();
+
+        borrow_metadata(&conn, 1, 2, None, None, None).unwrap();
+        let (desc, dev, cover, custom): (Option<String>, Option<String>, Option<String>, i64) = conn
+            .query_row(
+                "SELECT description, developer, cover_path, cover_custom FROM games WHERE id = 2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(desc.as_deref(), Some("mine"));
+        assert_eq!(dev.as_deref(), Some("Nintendo"));
+        assert_eq!(cover.as_deref(), Some("C:/media/2/cover.png"));
+        assert_eq!(custom, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

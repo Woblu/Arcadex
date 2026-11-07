@@ -1234,14 +1234,16 @@ body.skin-browser {
   padding: 12px 16px;
   text-align: left;
   color: var(--br-dim);
-  background: rgba(255, 255, 255, 0.03);
+  /* Near-opaque, so the drifting field passes behind the words rather
+     than through them. */
+  background: rgba(8, 16, 40, 0.9);
   border: 1px solid transparent;
   transition: background 0.14s, color 0.14s, border-color 0.14s, transform 0.14s;
 }
 .br-card:hover { color: var(--br-text); }
 .br-card.on, .br-card:focus-visible {
   color: var(--br-text);
-  background: rgba(120, 160, 255, 0.12);
+  background: rgba(24, 38, 82, 0.96);
   border-color: var(--br-line);
   transform: translateX(6px);
 }
@@ -1276,6 +1278,9 @@ body.skin-browser {
   display: none;
   flex-direction: column;
   min-height: 0;
+  background: rgba(4, 10, 28, 0.88);
+  border-radius: 6px;
+  padding: 4px 14px 14px;
 }
 @media (min-width: 900px) { .br-panel { display: flex; } }
 .br-title { font-size: 19px; font-weight: 300; letter-spacing: 0.05em; margin: 0; }
@@ -1355,7 +1360,9 @@ body.skin-wii {
   --wii-edge: #b6bfc5;
   --wii-edge-soft: #d7dee2;
   --wii-ink: #3a4146;
-  --wii-dim: #77838a;
+  /* 5.1:1 on the page; the old #77838a was 3.5:1, under the 4.5:1 that
+     small text needs. */
+  --wii-dim: #5d686e;
   --wii-blue: #00a8e0;
   --wii-blue-soft: rgba(0, 168, 224, 0.55);
   --wii-tray: #dfe4e7;
@@ -1743,4 +1750,70 @@ body.skin-wii {
   .wii-arrow,
   .wii-orb,
   .wii-slot { transition: none; }
+}
+
+/* --------------------------------------------------------- corner stack ---
+   The getting-started card and the update card share the bottom-right
+   corner, one above the other, rather than landing on top of each other. */
+
+.corner-stack {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.corner-stack .update-card { position: static; }
+/* The couch layouts keep controls along the bottom - a tray, a hint bar, or
+   Scan, Stats and Settings in the bottom-right corner - which a card in the
+   corner sat on top of. Above them instead. */
+body:not(.skin-launchbox) .corner-stack { bottom: 112px; }
+
+.setup-card {
+  width: 340px;
+  padding: 14px 15px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+.setup-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.setup-steps { list-style: none; margin: 0; padding: 0; }
+.setup-steps li { display: flex; gap: 11px; padding: 9px 0; border-top: 1px solid var(--border); }
+.setup-steps li:first-child { border-top: none; }
+.setup-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+.setup-steps li.done .setup-mark { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.setup-steps li.done .setup-title { color: var(--text-2); }
+.setup-text { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
+.setup-title { font-weight: 600; font-size: 13px; }
+.setup-optional {
+  margin-left: 7px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.setup-text .btn { margin-top: 3px; }
+
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }

@@ -155,6 +155,16 @@ export interface DetectedEmulator {
   coreCount: number;
 }
 
+/** How far setting up has got. */
+export interface SetupStatus {
+  folders: number;
+  games: number;
+  /** Systems you have games for that nothing is set up to run yet. */
+  systemsWithoutEmulator: string[];
+  /** Whether descriptions can be fetched, beyond artwork. */
+  descriptions: boolean;
+}
+
 /** A standalone emulator found installed. */
 export interface FoundEmulator {
   emulator: string;

@@ -49,3 +49,13 @@ describe("skins", () => {
     expect(isSkin(undefined)).toBe(false);
   });
 });
+
+describe("listOf", () => {
+  it("names a few systems and counts the rest", async () => {
+    const { listOf } = await import("./components/SetupChecklist");
+    expect(listOf(["Xbox 360"])).toBe("Xbox 360");
+    expect(listOf(["PlayStation 3", "Xbox 360"])).toBe("PlayStation 3 and Xbox 360");
+    expect(listOf(["A", "B", "C"])).toBe("A, B and C");
+    expect(listOf(["A", "B", "C", "D", "E"])).toBe("A, B and 3 more");
+  });
+});

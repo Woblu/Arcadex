@@ -104,7 +104,11 @@ export default function Sidebar({
       {stats && (
         <div className="stat-row">
           <span>{stats.scraped} scraped</span>
-          <span>{formatPlaytime(stats.totalPlaySeconds)} played</span>
+          <span>
+            {stats.totalPlaySeconds > 0
+              ? `${formatPlaytime(stats.totalPlaySeconds)} played`
+              : "Nothing played yet"}
+          </span>
         </div>
       )}
 

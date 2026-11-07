@@ -71,10 +71,29 @@ export async function checkForUpdate(manual = false): Promise<UpdateInfo | null>
  * moving — an installer that silently does nothing for a minute reads as a
  * hang, and this one is tens of megabytes.
  */
+/**
+ * Set by the app while a game is running or being got ready.
+ *
+ * Installing restarts Playdex, and the restart takes with it the wait on the
+ * emulator that records the session when it closes - so updating mid-game
+ * lost that session's play time. Both places that can install an update come
+ * through here.
+ */
+let gameRunning = false;
+
+export function setGameRunning(running: boolean) {
+  gameRunning = running;
+}
+
 export async function installUpdate(
   info: UpdateInfo,
   onProgress: (state: DownloadState) => void,
 ): Promise<void> {
+  if (gameRunning) {
+    throw new Error(
+      "A game is running. Update once it has closed, so its play time is recorded.",
+    );
+  }
   let received = 0;
   let total: number | null = null;
 

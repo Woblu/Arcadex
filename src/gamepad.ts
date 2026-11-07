@@ -14,7 +14,7 @@
  *    is no second structure to keep in sync with the markup.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 export type NavDirection = "up" | "down" | "left" | "right";
 
@@ -376,6 +376,33 @@ export function useGamepad(
       window.removeEventListener("focus", onFocus);
     };
   }, [enabled]);
+}
+
+/**
+ * True while the controller setup is waiting for a button.
+ *
+ * Those presses are answers, not navigation. Without this the app's own pad
+ * handling acted on them too: pressing the button meant for Back closed
+ * Settings in the middle of setting it up, and Confirm pressed whatever was
+ * focused - on exactly the unrecognised pads the screen exists for.
+ */
+let capturing = false;
+const captureListeners = new Set<() => void>();
+
+export function setPadCapture(on: boolean) {
+  if (capturing === on) return;
+  capturing = on;
+  captureListeners.forEach((listener) => listener());
+}
+
+export function usePadCapture(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      captureListeners.add(listener);
+      return () => captureListeners.delete(listener);
+    },
+    () => capturing,
+  );
 }
 
 // --------------------------------------------------------------- focus

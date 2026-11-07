@@ -35,7 +35,7 @@ export default function SavesSection({ game }: { game: Game }) {
     setSaveBusy(true);
     setSaveError(null);
     try {
-      await api.deleteSaveState(entry.path);
+      await api.deleteSaveState(game.id, entry.path);
       setSaveNote(`Deleted ${entry.name}`);
       await refreshSaves();
     } catch (e) {

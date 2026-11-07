@@ -99,6 +99,50 @@ pub struct ScrapeResult {
     pub halt: Option<String>,
 }
 
+/// How long a provider that says its allowance is spent is left alone before
+/// being asked again. ScreenScraper's commonest refusal is per minute.
+const QUOTA_REST: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The providers that ran out of allowance during a run, and until when to
+/// leave each one be.
+///
+/// One provider's limit used to stop the whole run, though the others could
+/// carry on: a five-thousand-game fetch ended at the first burst limit
+/// ScreenScraper hit. Now that provider sits out for a while and the rest
+/// keep going, and the run only stops when nothing at all is left to ask.
+#[derive(Default)]
+pub struct Spent {
+    screenscraper: Option<std::time::Instant>,
+    tgdb: Option<std::time::Instant>,
+    /// Said once in the summary at the end.
+    pub notes: Vec<String>,
+}
+
+impl Spent {
+    fn resting(until: Option<std::time::Instant>) -> bool {
+        until.is_some_and(|t| std::time::Instant::now() < t)
+    }
+
+    fn rest(&mut self, which: &str, msg: &str) {
+        let until = Some(std::time::Instant::now() + QUOTA_REST);
+        match which {
+            "ScreenScraper" => self.screenscraper = until,
+            _ => self.tgdb = until,
+        }
+        let note = format!("{which}: {msg}");
+        if !self.notes.contains(&note) {
+            self.notes.push(note);
+        }
+    }
+
+    /// Whether anything can still be asked about a game right now.
+    fn anything_left(&self, creds: &Credentials) -> bool {
+        creds.libretro_enabled
+            || (creds.has_screenscraper() && !Self::resting(self.screenscraper))
+            || (creds.has_tgdb() && !Self::resting(self.tgdb))
+    }
+}
+
 /// Look a single game up, download its art, and write it to the library.
 pub async fn scrape_game(
     client: &reqwest::Client,
@@ -106,6 +150,7 @@ pub async fn scrape_game(
     creds: &Credentials,
     media_root: &Path,
     game: &Game,
+    spent: &mut Spent,
 ) -> Result<ScrapeResult> {
     let mut meta: Option<GameMeta> = None;
     let mut source: Option<String> = None;
@@ -113,28 +158,31 @@ pub async fn scrape_game(
     let mut halt: Option<String> = None;
 
     // ScreenScraper first: it matches on hash, so it is the only exact one.
-    if creds.has_screenscraper() {
+    if creds.has_screenscraper() && !Spent::resting(spent.screenscraper) {
         match screenscraper::lookup(client, creds, game).await {
             Outcome::Found(m) => {
                 meta = Some(*m);
                 source = Some("screenscraper".into());
             }
             Outcome::NotFound => {}
-            Outcome::Quota(msg) => halt = Some(format!("ScreenScraper: {msg}")),
+            Outcome::Quota(msg) => spent.rest("ScreenScraper", &msg),
             Outcome::Error(e) => last_error = Some(e),
         }
     }
 
-    if meta.is_none() && creds.has_tgdb() {
+    if meta.is_none() && creds.has_tgdb() && !Spent::resting(spent.tgdb) {
         match thegamesdb::lookup(client, creds, game).await {
             Outcome::Found(m) => {
                 meta = Some(*m);
                 source = Some("thegamesdb".into());
             }
             Outcome::NotFound => {}
-            Outcome::Quota(msg) => halt = Some(format!("TheGamesDB: {msg}")),
+            Outcome::Quota(msg) => spent.rest("TheGamesDB", &msg),
             Outcome::Error(e) => last_error = Some(e),
         }
+    }
+    if !spent.anything_left(creds) {
+        halt = Some(spent.notes.join("; "));
     }
 
     // Fill in artwork from libretro-thumbnails, which needs no credentials.
@@ -422,4 +470,37 @@ async fn check_libretro(client: &reqwest::Client, creds: &Credentials) -> Provid
         Err(_) => status.message = "Could not reach thumbnails.libretro.com".into(),
     }
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn creds(ss: bool, tgdb: bool, libretro: bool) -> Credentials {
+        Credentials {
+            ss_devid: if ss { "id".into() } else { String::new() },
+            ss_devpassword: if ss { "pw".into() } else { String::new() },
+            tgdb_key: if tgdb { "key".into() } else { String::new() },
+            libretro_enabled: libretro,
+            ..Default::default()
+        }
+    }
+
+    /// One provider's limit rests that provider; the run goes on while
+    /// anything is left to ask, and only then stops.
+    #[test]
+    fn a_spent_provider_rests_while_the_others_carry_on() {
+        let both = creds(true, true, false);
+        let mut spent = Spent::default();
+        spent.rest("ScreenScraper", "request quota reached");
+        assert!(Spent::resting(spent.screenscraper));
+        assert!(spent.anything_left(&both), "TheGamesDB can still answer");
+
+        spent.rest("TheGamesDB", "monthly allowance used");
+        assert!(!spent.anything_left(&both), "nothing left: the run stops");
+        assert_eq!(spent.notes.len(), 2);
+
+        // libretro has no allowance to spend, so it always has something.
+        assert!(spent.anything_left(&creds(true, true, true)));
+    }
 }

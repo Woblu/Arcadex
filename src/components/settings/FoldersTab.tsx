@@ -12,6 +12,9 @@ interface Props extends TabProps {
 export default function FoldersTab({ onError, onMessage, onScanRequest }: Props) {
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
   const [known, setKnown] = useState<PlatformInfo[]>([]);
+  /** What cleaning up would do, shown before it is done. */
+  const [missing, setMissing] = useState<{ missing: number; unreachable: number } | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const reload = async () => {
     try {
@@ -98,15 +101,58 @@ export default function FoldersTab({ onError, onMessage, onScanRequest }: Props)
         </button>
         <button
           className="btn"
+          disabled={checking}
           onClick={async () => {
-            const removed = await api.cleanMissing();
-            onMessage(`Removed ${removed} missing entries`);
-            await reload();
+            setChecking(true);
+            try {
+              setMissing(await api.missingReport());
+            } catch (err) {
+              onError(api.errorMessage(err));
+            } finally {
+              setChecking(false);
+            }
           }}
         >
-          Clean missing entries
+          {checking ? "Checking…" : "Clean missing entries"}
         </button>
       </div>
+
+      {/* Counted and said first. It used to remove at once, and with a drive
+          unplugged that was everything on the drive. Games on a drive or
+          share that is not there are now left out entirely. */}
+      {missing && (
+        <div className="unpack-box" style={{ marginTop: 12 }}>
+          <div className="hint">
+            {missing.missing === 0
+              ? "Nothing is missing."
+              : `${missing.missing} entr${missing.missing === 1 ? "y points" : "ies point"} at files that are gone. Remove ${missing.missing === 1 ? "it" : "them"} from the library? The files were already gone; nothing on disk changes.`}
+            {missing.unreachable > 0 &&
+              ` ${missing.unreachable} more ${missing.unreachable === 1 ? "is" : "are"} on a drive or share that is not connected, and ${missing.unreachable === 1 ? "is" : "are"} kept.`}
+          </div>
+          <div className="row" style={{ marginTop: 8 }}>
+            {missing.missing > 0 && (
+              <button
+                className="btn small danger"
+                onClick={async () => {
+                  try {
+                    const removed = await api.cleanMissing();
+                    onMessage(`Removed ${removed} missing entr${removed === 1 ? "y" : "ies"}`);
+                    setMissing(null);
+                    await reload();
+                  } catch (err) {
+                    onError(api.errorMessage(err));
+                  }
+                }}
+              >
+                Remove {missing.missing}
+              </button>
+            )}
+            <button className="btn small" onClick={() => setMissing(null)}>
+              {missing.missing > 0 ? "Keep them" : "OK"}
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

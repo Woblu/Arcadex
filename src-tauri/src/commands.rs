@@ -298,10 +298,86 @@ pub async fn scan_library(app: AppHandle) -> Result<ScanProgress> {
     })
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingReport {
+    /// Entries whose file is gone.
+    pub missing: usize,
+    /// Entries on a drive or share that is not there, which are kept.
+    pub unreachable: usize,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupStatus {
+    pub folders: usize,
+    pub games: i64,
+    /// Systems you have games for that nothing is set up to run yet.
+    pub systems_without_emulator: Vec<String>,
+    /// Whether anything beyond artwork - descriptions, release dates - can
+    /// be fetched.
+    pub descriptions: bool,
+}
+
+/// How far setting up has got, for the first-run checklist.
+///
+/// The first thing most people did was add a folder, scan, press Play, and
+/// be told RetroArch was not set. This is what lets the app say which
+/// systems cannot start yet before anyone presses anything.
 #[tauri::command]
-pub fn clean_missing(db: State<Db>) -> Result<usize> {
-    let conn = db.0.lock().unwrap();
-    scan::remove_missing(&conn)
+pub async fn setup_status(app: AppHandle) -> Result<SetupStatus> {
+    off_main(move || {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().unwrap();
+        let retroarch = db::get_setting(&conn, "retroarch_path")?
+            .map(|p| crate::detect::clean_path(&p))
+            .is_some_and(|p| !p.is_empty() && std::path::Path::new(&p).exists());
+        let mut without = Vec::new();
+        for p in db::platform_counts(&conn)? {
+            let cfg = launch::resolve_config(&conn, &p.slug);
+            let ready = match cfg.mode.as_str() {
+                "custom" => cfg.custom_command.as_deref().is_some_and(|c| !c.trim().is_empty()),
+                _ => retroarch && cfg.core.as_deref().is_some_and(|c| !c.is_empty()),
+            };
+            if !ready {
+                without.push(platforms::display_name(&p.slug));
+            }
+        }
+        let settings = crate::secrets::all_settings(&conn, &app.state::<AppState>().vault)?;
+        let creds = scrape::Credentials::from_settings(&settings);
+        Ok(SetupStatus {
+            folders: db::list_folders(&conn)?.len(),
+            games: db::stats(&conn)?.total_games,
+            systems_without_emulator: without,
+            descriptions: creds.has_screenscraper() || creds.has_tgdb(),
+        })
+    })
+    .await
+}
+
+/// What cleaning up would remove, so it can be said before it is done.
+#[tauri::command]
+pub async fn missing_report(app: AppHandle) -> Result<MissingReport> {
+    off_main(move || {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().unwrap();
+        let (missing, unreachable) = db::missing_entries(&conn)?;
+        Ok(MissingReport {
+            missing: missing.len(),
+            unreachable,
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn clean_missing(app: AppHandle) -> Result<usize> {
+    off_main(move || {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().unwrap();
+        scan::remove_missing(&conn)
+    })
+    .await
 }
 
 // -------------------------------------------------------------- scrape
@@ -373,6 +449,7 @@ async fn run_scrape(
     let mut ok = 0usize;
     let mut missed = 0usize;
     let mut halted: Option<String> = None;
+    let mut spent = scrape::Spent::default();
 
     for (i, game) in games.iter().enumerate() {
         let cancel = app.state::<AppState>().scrape_cancel.load(Ordering::SeqCst);
@@ -381,7 +458,24 @@ async fn run_scrape(
             break;
         }
 
-        let res = scrape::scrape_game(client, &db.0, &creds, media_root, game).await?;
+        // One game going wrong - artwork that will not save, a database
+        // hiccup - is that game's error, not the run's. Letting it end the run
+        // also skipped the closing event, which left the progress card up for
+        // good.
+        let res = match scrape::scrape_game(client, &db.0, &creds, media_root, game, &mut spent).await {
+            Ok(res) => res,
+            Err(e) => {
+                if let Ok(guard) = db.0.lock() {
+                    let _ = db::set_scrape_status(&guard, game.id, "error");
+                }
+                eprintln!("fetching {} failed: {e}", game.title);
+                scrape::ScrapeResult {
+                    status: "error".into(),
+                    source: None,
+                    halt: None,
+                }
+            }
+        };
         if res.status == "ok" {
             ok += 1;
         } else {
@@ -414,6 +508,10 @@ async fn run_scrape(
 
     let summary = match &halted {
         Some(reason) => format!("Stopped after {ok} matched, {missed} unmatched — {reason}"),
+        None if !spent.notes.is_empty() => format!(
+            "{ok} matched, {missed} unmatched. Rested partway: {}",
+            spent.notes.join("; ")
+        ),
         None => format!("{ok} matched, {missed} unmatched"),
     };
 
@@ -457,13 +555,24 @@ pub async fn scrape_one(app: AppHandle, id: i64) -> Result<String> {
         ));
     }
 
-    let res = scrape::scrape_game(&client, &db.0, &creds, &media_root, &game).await?;
+    let res = scrape::scrape_game(&client, &db.0, &creds, &media_root, &game, &mut scrape::Spent::default()).await?;
     Ok(match res.source {
         Some(src) => format!("Matched via {src}"),
         None => res
             .halt
             .unwrap_or_else(|| "No match found".to_string()),
     })
+}
+
+/// Run a command's work off the main thread.
+///
+/// Tauri runs a command that is not `async` on the main thread, and the whole
+/// window stands still until it returns. Anything that reads a ROM, a DAT or
+/// a folder of saves, or waits on a drive, goes through here.
+async fn off_main<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| AppError::Other(format!("background work failed: {e}")))?
 }
 
 // -------------------------------------------------------------- launch
@@ -730,12 +839,19 @@ fn apply_patch_file(
 
     let dir = state.media_root.join("hacks").join(base_game_id.to_string());
     std::fs::create_dir_all(&dir)?;
-    let filename = format!("{}.{ext}", sanitize_filename(&title));
-    let dest = dir.join(&filename);
-    std::fs::write(&dest, &patched)?;
+    let dest = unique_hack_path(&dir, &title, &ext);
+    let filename = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
 
+    // Written aside and put in place only once the library has the entry, so
+    // a failure in between leaves neither a stray ROM nor an entry for one.
+    let partial = dir.join(format!("{filename}.partial"));
+    std::fs::write(&partial, &patched)?;
     let conn = db.0.lock().unwrap();
-    db::insert_hack(
+    let inserted = db::insert_hack(
         &conn,
         &dest.to_string_lossy(),
         &filename,
@@ -746,37 +862,80 @@ fn apply_patch_file(
         base_game_id,
         patch_path,
         info.format.as_str(),
-    )
+    );
+    match inserted {
+        Ok(id) => {
+            std::fs::rename(&partial, &dest)?;
+            Ok(id)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&partial);
+            Err(e)
+        }
+    }
+}
+
+/// A file name for a new hack that nothing in its folder has yet, and that
+/// Windows will take: "Kaizo.sfc", then "Kaizo (2).sfc".
+///
+/// Two hacks of the same game given the same title used to share a file, so
+/// the second patch quietly replaced the first one's ROM.
+fn unique_hack_path(dir: &std::path::Path, title: &str, ext: &str) -> std::path::PathBuf {
+    let mut stem = sanitize_filename(title);
+    // Device names Windows reserves, whatever follows them.
+    let upper = stem.to_ascii_uppercase();
+    let device = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.as_bytes()[3].is_ascii_digit());
+    if device {
+        stem.push('_');
+    }
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                dir.join(format!("{stem}.{ext}"))
+            } else {
+                dir.join(format!("{stem} ({n}).{ext}"))
+            }
+        })
+        .find(|p| !p.exists())
+        .expect("an unused name")
 }
 
 /// Apply a patch chosen from the file system.
 #[tauri::command]
-pub fn add_hack(
-    state: State<AppState>,
-    db: State<Db>,
+pub async fn add_hack(
+    app: AppHandle,
     base_game_id: i64,
     patch_path: String,
     title: Option<String>,
 ) -> Result<i64> {
-    apply_patch_file(&state, &db, base_game_id, &patch_path, title)
+    off_main(move || {
+        apply_patch_file(&app.state::<AppState>(), &app.state::<Db>(), base_game_id, &patch_path, title)
+    })
+    .await
 }
 
 /// Apply a patch already in the catalog.
 #[tauri::command]
-pub fn apply_catalog_patch(
-    state: State<AppState>,
-    db: State<Db>,
+pub async fn apply_catalog_patch(
+    app: AppHandle,
     base_game_id: i64,
     patch_id: i64,
     title: Option<String>,
 ) -> Result<i64> {
-    let entry = {
-        let conn = db.0.lock().unwrap();
-        db::get_patch(&conn, patch_id)?
-            .ok_or_else(|| AppError::Other("Patch not found in the catalog".into()))?
-    };
-    let title = title.or(Some(entry.name.clone()));
-    apply_patch_file(&state, &db, base_game_id, &entry.path, title)
+    off_main(move || {
+        let db = app.state::<Db>();
+        let entry = {
+            let conn = db.0.lock().unwrap();
+            db::get_patch(&conn, patch_id)?
+                .ok_or_else(|| AppError::Other("Patch not found in the catalog".into()))?
+        };
+        let title = title.or(Some(entry.name.clone()));
+        apply_patch_file(&app.state::<AppState>(), &db, base_game_id, &entry.path, title)
+    })
+    .await
 }
 
 // ------------------------------------------------------- patch catalog
@@ -995,10 +1154,14 @@ pub async fn add_dropped(app: AppHandle, paths: Vec<String>) -> Result<scan::Dro
 
 /// Import a No-Intro or Redump DAT so dumps can be checked against it.
 #[tauri::command]
-pub fn import_dat(db: State<Db>, path: String) -> Result<crate::dats::ImportSummary> {
-    let (name, roms) = crate::dats::parse(std::path::Path::new(&path))?;
-    let conn = db.0.lock().unwrap();
-    crate::dats::store(&conn, &name, &roms)
+pub async fn import_dat(app: AppHandle, path: String) -> Result<crate::dats::ImportSummary> {
+    off_main(move || {
+        let (name, roms) = crate::dats::parse(std::path::Path::new(&path))?;
+        let db = app.state::<Db>();
+        let conn = db.0.lock().unwrap();
+        crate::dats::store(&conn, &name, &roms)
+    })
+    .await
 }
 
 #[derive(serde::Serialize)]
@@ -1012,13 +1175,17 @@ pub struct DatStatus {
 }
 
 #[tauri::command]
-pub fn dat_status(db: State<Db>) -> Result<DatStatus> {
-    let conn = db.0.lock().unwrap();
-    Ok(DatStatus {
-        total: crate::dats::count(&conn)?,
-        loaded: crate::dats::loaded(&conn)?,
-        library: crate::dats::verify_library(&conn)?,
+pub async fn dat_status(app: AppHandle) -> Result<DatStatus> {
+    off_main(move || {
+        let db = app.state::<Db>();
+        let conn = db.0.lock().unwrap();
+        Ok(DatStatus {
+            total: crate::dats::count(&conn)?,
+            loaded: crate::dats::loaded(&conn)?,
+            library: crate::dats::verify_library(&conn)?,
+        })
     })
+    .await
 }
 
 #[tauri::command]
@@ -1103,18 +1270,22 @@ pub struct CacheUsage {
 
 /// What the unpacked-ROM cache is costing right now.
 #[tauri::command]
-pub fn cache_usage(app: AppHandle, db: State<Db>) -> CacheUsage {
-    let root = app.state::<AppState>().media_root.clone();
-    let (bytes, entries) = launch::cache_usage(&root);
-    let limit = {
-        let conn = db.0.lock().unwrap();
-        launch::cache_limit(&conn)
-    };
-    CacheUsage {
-        bytes,
-        entries,
-        limit_bytes: limit,
-    }
+pub async fn cache_usage(app: AppHandle) -> Result<CacheUsage> {
+    off_main(move || {
+        let root = app.state::<AppState>().media_root.clone();
+        let (bytes, entries) = launch::cache_usage(&root);
+        let limit = {
+            let db = app.state::<Db>();
+            let conn = db.0.lock().unwrap();
+            launch::cache_limit(&conn)
+        };
+        Ok(CacheUsage {
+            bytes,
+            entries,
+            limit_bytes: limit,
+        })
+    })
+    .await
 }
 
 /// Swap a game's archive for what is inside it, deleting the archive.
@@ -1168,9 +1339,8 @@ pub async fn unpack_in_place(app: AppHandle, id: i64) -> Result<String> {
 /// Empty it. Nothing on disk outside the cache is touched, and every entry is
 /// rebuilt on the next launch of that game.
 #[tauri::command]
-pub fn clear_cache(app: AppHandle) -> Result<u64> {
-    let root = app.state::<AppState>().media_root.clone();
-    launch::clear_cache(&root)
+pub async fn clear_cache(app: AppHandle) -> Result<u64> {
+    off_main(move || launch::clear_cache(&app.state::<AppState>().media_root)).await
 }
 
 // ------------------------------------------------------- hack bundles
@@ -1226,6 +1396,28 @@ pub async fn list_hack_bundles(app: AppHandle) -> Result<Vec<HackBundle>> {
     Ok(out)
 }
 
+/// Bundles being downloaded, so the same one is not fetched twice at once
+/// into the same file.
+static DOWNLOADING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+struct Downloading(String);
+
+impl Downloading {
+    fn claim(name: &str) -> Result<Self> {
+        if !DOWNLOADING.lock().unwrap().insert(name.to_string()) {
+            return Err(AppError::Other(format!("{name} is already downloading.")));
+        }
+        Ok(Downloading(name.to_string()))
+    }
+}
+
+impl Drop for Downloading {
+    fn drop(&mut self) {
+        DOWNLOADING.lock().unwrap().remove(&self.0);
+    }
+}
+
 /// Download one bundle and index every patch inside it. These run to about a
 /// gigabyte, so progress is reported as it streams.
 #[tauri::command]
@@ -1233,14 +1425,33 @@ pub async fn download_hack_bundle(app: AppHandle, bundle: HackBundle) -> Result<
     use futures_util::StreamExt;
     use std::io::Write;
 
-    let (client, media_root) = {
-        let state = app.state::<AppState>();
-        (state.client.clone(), state.media_root.clone())
-    };
+    // Only the archive this window lists bundles from. The URL comes from the
+    // page, and a command that downloads whatever it is handed is one any
+    // script in the page could point anywhere.
+    let allowed = format!("https://archive.org/download/{HACK_ARCHIVE}/");
+    if !bundle.url.starts_with(&allowed) {
+        return Err(AppError::Other(
+            "Only bundles from the ROM Hack Patch Archive can be downloaded here.".into(),
+        ));
+    }
+    let _downloading = Downloading::claim(&bundle.name)?;
 
+    let media_root = app.state::<AppState>().media_root.clone();
     let dir = media_root.join("bundles");
     std::fs::create_dir_all(&dir)?;
     let dest = dir.join(crate::hacks::safe_file_name(&bundle.name));
+    let partial = dir.join(format!("{}.part", crate::hacks::safe_file_name(&bundle.name)));
+
+    // Not the shared client: its thirty-second limit covers the whole
+    // request, body and all, and ended a gigabyte download on any connection
+    // slower than about thirty megabytes a second. This one only gives up
+    // when the connection goes quiet.
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("playdex/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| AppError::Other(format!("Download failed: {e}")))?;
 
     let resp = client
         .get(&bundle.url)
@@ -1255,13 +1466,22 @@ pub async fn download_hack_bundle(app: AppHandle, bundle: HackBundle) -> Result<
     }
 
     let total = resp.content_length().unwrap_or(bundle.size.max(0) as u64);
-    let mut file = std::fs::File::create(&dest)?;
+    // Downloaded beside its name and renamed once whole, so an interrupted
+    // download is never taken for a bundle.
+    let mut file = std::fs::File::create(&partial)?;
     let mut stream = resp.bytes_stream();
     let mut done: u64 = 0;
     let mut last_pct = u64::MAX;
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| AppError::Other(format!("Download interrupted: {e}")))?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                drop(file);
+                let _ = std::fs::remove_file(&partial);
+                return Err(AppError::Other(format!("Download interrupted: {e}")));
+            }
+        };
         file.write_all(&chunk)?;
         done += chunk.len() as u64;
 
@@ -1284,11 +1504,17 @@ pub async fn download_hack_bundle(app: AppHandle, bundle: HackBundle) -> Result<
             );
         }
     }
+    file.flush()?;
     drop(file);
+    std::fs::rename(&partial, &dest)?;
 
-    // Hand the finished archive to the importer already built for local files.
+    // Hand the finished archive to the importer already built for local
+    // files. The patches come out into the catalog's own folder; the bundle,
+    // a gigabyte of everything else, is deleted afterwards rather than left
+    // to pile up.
     let handle = app.clone();
-    let (imported, skipped) =
+    let bundle_file = dest.clone();
+    let imported =
         tauri::async_runtime::spawn_blocking(move || -> Result<(usize, usize)> {
             let db_handle = handle.state::<Db>().0.clone();
             let root = handle.state::<AppState>().media_root.join("patches");
@@ -1297,10 +1523,12 @@ pub async fn download_hack_bundle(app: AppHandle, bundle: HackBundle) -> Result<
             let mut on_progress = move |p: ImportProgress| {
                 let _ = emitter.emit("import-progress", p);
             };
-            crate::hacks::import(&mut on_progress, &db_handle, &root, &dest)
+            crate::hacks::import(&mut on_progress, &db_handle, &root, &bundle_file)
         })
         .await
-        .map_err(|e| AppError::Other(e.to_string()))??;
+        .map_err(|e| AppError::Other(e.to_string()));
+    let _ = std::fs::remove_file(&dest);
+    let (imported, skipped) = imported??;
 
     Ok(format!(
         "{} — catalogued {imported} patches, skipped {skipped}",
@@ -1318,77 +1546,69 @@ fn retroarch_exe(conn: &rusqlite::Connection) -> Result<std::path::PathBuf> {
     Ok(std::path::PathBuf::from(path))
 }
 
-/// The save files and save states belonging to one game.
-#[tauri::command]
-pub fn list_saves(db: State<Db>, game_id: i64) -> Result<Vec<SaveEntry>> {
-    let conn = db.0.lock().unwrap();
-    let game = db::get_game(&conn, game_id)?
-        .ok_or_else(|| AppError::Other("Game not found".into()))?;
-    let exe = retroarch_exe(&conn)?;
-    let core = launch::resolve_for_game(&conn, &game)
-        .core
-        .unwrap_or_default();
-    let folder = crate::cheats::core_folder_name(&core);
-
-    Ok(crate::saves::find(
-        &exe,
-        std::path::Path::new(&game.path),
-        &rom_name_of(&game),
-        &folder,
-    ))
-}
-
-/// Copy this game's saves somewhere safe before you overwrite them.
-#[tauri::command]
-pub fn back_up_saves(state: State<AppState>, db: State<Db>, game_id: i64) -> Result<String> {
-    let entries = {
+/// One game's saves and states, and its title. The library is only held
+/// while the game is looked up; the folders are listed after.
+fn saves_of(app: &AppHandle, game_id: i64) -> Result<(Vec<SaveEntry>, String)> {
+    let (exe, game, folder) = {
+        let db = app.state::<Db>();
         let conn = db.0.lock().unwrap();
         let game = db::get_game(&conn, game_id)?
             .ok_or_else(|| AppError::Other("Game not found".into()))?;
         let exe = retroarch_exe(&conn)?;
-        let core = launch::resolve_for_game(&conn, &game)
-            .core
-            .unwrap_or_default();
-        let folder = crate::cheats::core_folder_name(&core);
-        let found = crate::saves::find(
-            &exe,
-            std::path::Path::new(&game.path),
-            &rom_name_of(&game),
-            &folder,
-        );
+        let core = launch::resolve_for_game(&conn, &game).core.unwrap_or_default();
+        (exe, game, crate::cheats::core_folder_name(&core))
+    };
+    let found = crate::saves::find(&exe, std::path::Path::new(&game.path), &rom_name_of(&game), &folder);
+    Ok((found, game.title))
+}
+
+/// The save files and save states belonging to one game.
+#[tauri::command]
+pub async fn list_saves(app: AppHandle, game_id: i64) -> Result<Vec<SaveEntry>> {
+    off_main(move || Ok(saves_of(&app, game_id)?.0)).await
+}
+
+/// Copy this game's saves somewhere safe before you overwrite them.
+#[tauri::command]
+pub async fn back_up_saves(app: AppHandle, game_id: i64) -> Result<String> {
+    off_main(move || {
+        let (found, title) = saves_of(&app, game_id)?;
         if found.is_empty() {
             return Err(AppError::Other("Nothing to back up yet".into()));
         }
-        (found, game.title)
-    };
-
-    let dest = crate::saves::back_up(&entries.0, &state.media_root, &entries.1)?;
-    Ok(format!(
-        "Copied {} file{} to {}",
-        entries.0.len(),
-        if entries.0.len() == 1 { "" } else { "s" },
-        dest.to_string_lossy()
-    ))
+        let dest = crate::saves::back_up(&found, &app.state::<AppState>().media_root, &title)?;
+        Ok(format!(
+            "Copied {} file{} to {}",
+            found.len(),
+            if found.len() == 1 { "" } else { "s" },
+            dest.to_string_lossy()
+        ))
+    })
+    .await
 }
 
-/// Delete one save state. Battery saves are refused — losing real progress
-/// to a stray click is not worth the convenience.
+/// Delete one of a game's save states. Battery saves are refused — losing
+/// real progress to a stray click is not worth the convenience.
+///
+/// Only a state this game's own listing found can go. The command used to
+/// delete any path whose name had `.state` in it, wherever it was.
 #[tauri::command]
-pub fn delete_save_state(path: String) -> Result<()> {
-    let p = std::path::Path::new(&path);
-    let name = p
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if !name.contains(".state") {
-        return Err(AppError::Other(
-            "Only save states can be deleted here — battery saves hold your actual progress"
-                .into(),
-        ));
-    }
-    std::fs::remove_file(p)?;
-    Ok(())
+pub async fn delete_save_state(app: AppHandle, game_id: i64, path: String) -> Result<()> {
+    off_main(move || {
+        let (found, _) = saves_of(&app, game_id)?;
+        let entry = found.iter().find(|e| e.path == path).ok_or_else(|| {
+            AppError::Other("That is not one of this game's save states.".into())
+        })?;
+        if entry.kind != "state" {
+            return Err(AppError::Other(
+                "Only save states can be deleted here — battery saves hold your actual progress"
+                    .into(),
+            ));
+        }
+        std::fs::remove_file(&entry.path)?;
+        Ok(())
+    })
+    .await
 }
 
 // ------------------------------------------------------------ insights
@@ -1411,4 +1631,29 @@ pub fn library_insights(db: State<Db>) -> Result<LibraryInsights> {
         recent: db::recently_played(&conn, 6)?,
         most_played: db::most_played(&conn, 6)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A second hack with the same title gets a name of its own instead of
+    /// writing over the first one's ROM, and Windows' device names are kept
+    /// clear of.
+    #[test]
+    fn a_new_hack_never_takes_another_hacks_file() {
+        let dir = std::env::temp_dir().join(format!("playdex-hackname-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let first = unique_hack_path(&dir, "Kaizo", "sfc");
+        assert_eq!(first, dir.join("Kaizo.sfc"));
+        std::fs::write(&first, b"one").unwrap();
+        assert_eq!(unique_hack_path(&dir, "Kaizo", "sfc"), dir.join("Kaizo (2).sfc"));
+
+        assert_eq!(unique_hack_path(&dir, "con", "nes"), dir.join("con_.nes"));
+        assert_eq!(unique_hack_path(&dir, "COM1", "nes"), dir.join("COM1_.nes"));
+        assert_eq!(unique_hack_path(&dir, "Console", "nes"), dir.join("Console.nes"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

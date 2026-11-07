@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   detectLayout,
+  setPadCapture,
   useGamepad,
   type PadBindings,
   type PadInfo,
@@ -47,6 +48,13 @@ export default function ControllerSetup({ layout, custom, onChange }: Props) {
     const id = window.setTimeout(() => setLastPressed(null), 700);
     return () => window.clearTimeout(id);
   }, [lastPressed]);
+
+  // While a button is being asked for, the rest of the app leaves the pad
+  // alone.
+  useEffect(() => {
+    setPadCapture(step !== null);
+    return () => setPadCapture(false);
+  }, [step]);
 
   useGamepad({
     onConnected: (connected, padInfo) => setInfo(connected ? padInfo : null),

@@ -23,6 +23,7 @@ import type {
   SaveEntry,
   ProviderStatus,
   Settings,
+  SetupStatus,
 } from "./types";
 
 // ------------------------------------------------------------- library
@@ -71,7 +72,14 @@ export const pickFile = () => invoke<string | null>("pick_file");
 
 export const scanLibrary = () => invoke<ScanProgress>("scan_library");
 
+/** What cleaning up would remove, so it can be said before doing it. */
+export const missingReport = () =>
+  invoke<{ missing: number; unreachable: number }>("missing_report");
+
 export const cleanMissing = () => invoke<number>("clean_missing");
+
+/** How far setting up has got, for the first-run checklist. */
+export const setupStatus = () => invoke<SetupStatus>("setup_status");
 
 // -------------------------------------------------------------- scrape
 
@@ -190,8 +198,9 @@ export const listSaves = (gameId: number) =>
 export const backUpSaves = (gameId: number) =>
   invoke<string>("back_up_saves", { gameId });
 
-export const deleteSaveState = (path: string) =>
-  invoke<void>("delete_save_state", { path });
+/** Only a state this game's own listing found can be deleted. */
+export const deleteSaveState = (gameId: number, path: string) =>
+  invoke<void>("delete_save_state", { gameId, path });
 
 // --------------------------------------------------------- diagnostics
 
@@ -243,9 +252,24 @@ export const saveGameEmulator = (id: number, config: EmulatorConfig | null) =>
 // --------------------------------------------------------------- media
 
 /** Cached artwork is served over our own `media://` protocol. */
+/**
+ * Moved on whenever artwork may have changed on disk under the same path.
+ *
+ * A cover chosen again, or fetched again, is written over the old file, so
+ * its address does not change and the webview kept showing the old picture
+ * until a restart. A version on the end makes it a new address; the media
+ * protocol reads only the path, so the query costs nothing.
+ */
+let artVersion = 0;
+
+export function bumpArtVersion() {
+  artVersion += 1;
+}
+
 export function artUrl(path: string | null): string | null {
   if (!path) return null;
-  return convertFileSrc(path, "media");
+  const url = convertFileSrc(path, "media");
+  return artVersion > 0 ? `${url}?v=${artVersion}` : url;
 }
 
 // --------------------------------------------------------------- utils

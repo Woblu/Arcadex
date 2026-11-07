@@ -210,6 +210,18 @@ pub fn verify(
     if count(conn)? == 0 {
         return Ok(Verdict::NoDats);
     }
+    verify_against(conn, crc32, md5, sha1)
+}
+
+/// The lookup itself, for when it is already known that DATs are loaded.
+/// Checking a whole library through `verify` counted the catalogue once per
+/// game, which on a big library and a big DAT froze the Verification tab.
+fn verify_against(
+    conn: &Connection,
+    crc32: Option<&str>,
+    md5: Option<&str>,
+    sha1: Option<&str>,
+) -> Result<Verdict> {
     if crc32.is_none() && md5.is_none() && sha1.is_none() {
         return Ok(Verdict::NotHashed);
     }
@@ -277,7 +289,7 @@ pub fn verify_library(conn: &Connection) -> Result<HashMap<String, usize>> {
 
     for row in rows {
         let (crc32, md5, sha1) = row?;
-        let verdict = verify(conn, crc32.as_deref(), md5.as_deref(), sha1.as_deref())?;
+        let verdict = verify_against(conn, crc32.as_deref(), md5.as_deref(), sha1.as_deref())?;
         let key = match verdict {
             Verdict::Verified { .. } => "verified",
             Verdict::NotInDatabase => "unknown",

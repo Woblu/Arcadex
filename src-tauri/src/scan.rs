@@ -123,6 +123,13 @@ pub fn detect_platform(path: &Path, root: &Path, folder_override: Option<&str>) 
             }
             inner_names = names;
         }
+        // A disc image zipped up: `.iso` and `.bin` say nothing, but its first
+        // few megabytes do, and those are a short read even from inside an
+        // archive. Without this a zipped PlayStation 2 or Xbox 360 disc was
+        // Unidentified unless its name happened to say.
+        if let Some(found) = archived_disc_signature(path) {
+            return found.to_string();
+        }
     }
 
     // 3. What the file says about itself. Only reached when the extension did
@@ -278,6 +285,25 @@ fn emit(
             done,
         },
     );
+}
+
+/// How much of a zipped disc image is read to identify it.
+const DISC_HEAD_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The system the disc image inside an archive says it is, if the ROM inside
+/// is a disc image at all.
+fn archived_disc_signature(path: &Path) -> Option<&'static str> {
+    let entry = hashing::archive_rom_entry(path)?;
+    let inner_ext = Path::new(&entry)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !platforms::AMBIGUOUS_EXTS.contains(&inner_ext.as_str()) {
+        return None;
+    }
+    let head = hashing::read_archive_entry(path, &entry, DISC_HEAD_BYTES).ok()?;
+    signature::identify_head(&head)
 }
 
 /// What happened to one file.
@@ -982,16 +1008,16 @@ fn discover(folders: &[LibraryFolder]) -> Discovery {
 }
 
 /// Drop library entries whose file is gone. Does not delete anything on disk.
+///
+/// Only what `db::missing_entries` finds gone: a game on a drive that is not
+/// plugged in is kept. Each goes the way removing it by hand would, so hacks
+/// made from it stay.
 pub fn remove_missing(conn: &rusqlite::Connection) -> Result<usize> {
-    let paths = db::all_paths(conn)?;
-    let mut removed = 0;
-    for p in paths {
-        if !Path::new(&p).exists() {
-            conn.execute("DELETE FROM games WHERE path = ?1", rusqlite::params![p])?;
-            removed += 1;
-        }
+    let (missing, _) = db::missing_entries(conn)?;
+    for id in &missing {
+        db::remove_game(conn, *id)?;
     }
-    Ok(removed)
+    Ok(missing.len())
 }
 
 #[cfg(test)]
@@ -1429,6 +1455,35 @@ mod tests {
         let found = dropped_files(&known, &library(&library_dir), Some(&root.join("AppData")));
         let paths: Vec<&PathBuf> = found.iter().map(|c| &c.0).collect();
         assert_eq!(paths, vec![&dropped]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A disc image zipped up names its system in its first sectors, the same
+    /// as an unzipped one; nothing in the zip's or the image's name says it.
+    #[test]
+    fn a_zipped_disc_image_is_read_like_an_unzipped_one() {
+        let root = scratch("zippediso");
+        const SEC: usize = 2048;
+        let mut iso = vec![0u8; SEC * 20];
+        iso[16 * SEC] = 1;
+        iso[16 * SEC + 1..16 * SEC + 6].copy_from_slice(b"CD001");
+        let r = 16 * SEC + 156;
+        iso[r] = 34;
+        iso[r + 2..r + 6].copy_from_slice(&17u32.to_le_bytes());
+        iso[r + 10..r + 14].copy_from_slice(&(SEC as u32).to_le_bytes());
+        let name = b"SYSTEM.CNF;1";
+        let mut rec = vec![0u8; 33 + name.len() + 1];
+        rec[0] = rec.len() as u8;
+        rec[2..6].copy_from_slice(&18u32.to_le_bytes());
+        rec[10..14].copy_from_slice(&37u32.to_le_bytes());
+        rec[32] = name.len() as u8;
+        rec[33..33 + name.len()].copy_from_slice(name);
+        iso[17 * SEC..17 * SEC + rec.len()].copy_from_slice(&rec);
+        iso[18 * SEC..18 * SEC + 37].copy_from_slice(b"BOOT2 = cdrom0:SLUS_203.12;1 VER=1.00");
+
+        let zip = root.join("Some Game.zip");
+        crate::consoles::tests::zip_of(&zip, &[("Some Game.iso", iso)]);
+        assert_eq!(detect_platform(&zip, &root, None), "ps2");
         let _ = std::fs::remove_dir_all(&root);
     }
 
